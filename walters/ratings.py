@@ -1,24 +1,32 @@
-"""Per-week power ratings committed to the repo.
+"""Per-week power-rating files committed to the repo.
 
-Streamlit Cloud clones the repo onto the server, so any file committed at
-  ratings/massey_<season>_wk<NN>.csv        e.g. ratings/massey_2026_wk01.csv
-is readable by the app at run time. Drop a Massey export in that folder and
-the app uses it for that week — useful early season when Sonny Moore is
-still serving last season's final ratings.
+Sonny Moore is the automatic source, but early in the season his page still
+serves last season's final numbers, and some weeks you may simply trust a
+different rating. Drop a CSV at:
 
-Bonus: a file committed BEFORE a week is played is an as-of-that-week
-rating snapshot, so the History tab can backtest that week without the
-look-ahead bias that current ratings introduce.
+    ratings/<season>_wk<NN>.csv        e.g. ratings/2026_wk01.csv
+
+and the app uses it for that week instead of (or blended with) Sonny Moore.
+
+Because the file is keyed to the week, the History tab re-runs that week with
+the SAME ratings the live board used — so any week with a committed file is
+graded without look-ahead bias.
 
 Accepted formats:
-  * Massey's own Export CSV (header row containing 'Pwr'; the power VALUE
-    sits in the column immediately after the 'Pwr' rank column)
-  * a simple two-column Team,Rating CSV
+  * Massey's own Export file (header row containing 'Pwr'; the power VALUE is
+    the column right after the 'Pwr' rank column)
+  * a plain Team,Rating CSV
+
+Ratings must be point-spread-equivalent (a 3-point gap = a 3-point spread).
+The pipeline re-centres every source on the league mean, so absolute scale
+doesn't matter — only the gaps between teams.
 """
 from __future__ import annotations
 import csv
 import io
-import os
+from pathlib import Path
+
+import requests
 
 from .teams import resolve
 
@@ -26,7 +34,7 @@ DIR = "ratings"
 
 
 def path_for(season: int, week: int) -> str:
-    return os.path.join(DIR, f"massey_{season}_wk{int(week):02d}.csv")
+    return f"{DIR}/{season}_wk{int(week):02d}.csv"
 
 
 def parse_csv(text: str) -> dict[str, float]:
@@ -57,28 +65,36 @@ def parse_csv(text: str) -> dict[str, float]:
     return out
 
 
-def load(season: int, week: int) -> dict[str, float] | None:
-    """Return ratings for this week if a file is committed, else None."""
-    p = path_for(season, week)
-    if not os.path.exists(p):
-        return None
+def load_local(season: int, week: int) -> dict[str, float] | None:
+    """Read the ratings file straight off disk.
+
+    Streamlit Cloud checks the repo out and runs the app from it, so a
+    committed ratings/<season>_wk<NN>.csv is simply a local file — no
+    secrets, no network, works the moment the commit redeploys.
+    """
+    p = Path(__file__).resolve().parent.parent / path_for(season, week)
     try:
-        with open(p, encoding="utf-8-sig") as fh:
-            r = parse_csv(fh.read())
-        return r or None
+        if p.is_file():
+            return parse_csv(p.read_text(encoding="utf-8-sig")) or None
+    except Exception:
+        pass
+    return None
+
+
+def load_from_repo(repo: str, season: int, week: int, branch: str = "main",
+                   timeout: int = 15) -> dict[str, float] | None:
+    """Local file first; fall back to the public raw URL if a repo is set."""
+    local = load_local(season, week)
+    if local:
+        return local
+    if not repo:
+        return None
+    url = (f"https://raw.githubusercontent.com/{repo}/{branch}/"
+           f"{path_for(season, week)}")
+    try:
+        r = requests.get(url, timeout=timeout)
+        if r.status_code != 200:
+            return None
+        return parse_csv(r.text) or None
     except Exception:
         return None
-
-
-def available(season: int) -> list[int]:
-    """Weeks that have a committed ratings file."""
-    if not os.path.isdir(DIR):
-        return []
-    out = []
-    for name in os.listdir(DIR):
-        if name.startswith(f"massey_{season}_wk") and name.endswith(".csv"):
-            try:
-                out.append(int(name.split("_wk")[1][:-4]))
-            except ValueError:
-                continue
-    return sorted(out)
