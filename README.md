@@ -27,6 +27,7 @@ Hit **Run model** and get Walters lines vs the market for every game that week.
 
 ## Tabs
 - **Walters Board** — model lines vs market, edges ranked, Top Plays, explicit bet strings, QB-injury flag (🚑), international flag (🌍), high-confidence filter, per-game factor and injury detail, weekly CSV download.
+- **Saving**: boards are merged into one file per week, one row per game, first snapshot per game wins — so each slate (Thu / Sun / Mon) can be saved before its own kickoff without a later rerun overwriting earlier picks.
 - **History & Edge Analysis** — re-runs completed weeks, grades every pick against ESPN's closing number, and reports win% by edge bucket: does a bigger edge actually win more? Includes record, units at -110, and the 52.4% breakeven line.
 
 ## Removed: Formula / betting splits
