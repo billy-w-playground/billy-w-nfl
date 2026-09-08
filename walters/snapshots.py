@@ -48,23 +48,64 @@ def get_existing(repo: str, token: str, path: str, timeout: int = 20):
     return j.get("sha"), text
 
 
-def save(repo: str, token: str, season: int, week: int, csv_text: str,
-         overwrite: bool = False, timeout: int = 20) -> str:
-    """Commit the week's board. Returns 'created' | 'updated' | 'exists'."""
+def saved_games(repo: str, token: str, season: int, week: int,
+                timeout: int = 20) -> set[tuple[str, str]]:
+    """(away, home) pairs already recorded for this week."""
+    import csv as _csv
+    import io as _io
+    _, text = get_existing(repo, token, path_for(season, week), timeout)
+    if not text:
+        return set()
+    return {(r.get("Away", ""), r.get("Home", ""))
+            for r in _csv.DictReader(_io.StringIO(text))}
+
+
+def save_incremental(repo: str, token: str, season: int, week: int,
+                     rows: list[dict], fieldnames: list[str],
+                     timeout: int = 20) -> tuple[int, int]:
+    """Merge rows into the week's file, keeping the FIRST snapshot of each
+    game. Returns (added, skipped_already_saved).
+
+    Slates are saved separately across the week (Thu, then Sun, then Mon),
+    so a game recorded before kickoff is never replaced by a rerun after
+    the result is known."""
+    import csv as _csv
+    import io as _io
+
     path = path_for(season, week)
-    sha, _ = get_existing(repo, token, path, timeout)
-    if sha and not overwrite:
-        return "exists"
+    sha, text = get_existing(repo, token, path, timeout)
+    existing: list[dict] = []
+    if text:
+        existing = list(_csv.DictReader(_io.StringIO(text)))
+    have = {(r.get("Away", ""), r.get("Home", "")) for r in existing}
+
+    added = 0
+    for row in rows:
+        key = (str(row.get("Away", "")), str(row.get("Home", "")))
+        if key in have:
+            continue
+        existing.append({k: row.get(k, "") for k in fieldnames})
+        have.add(key)
+        added += 1
+    skipped = len(rows) - added
+    if added == 0:
+        return 0, skipped
+
+    buf = _io.StringIO()
+    w = _csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    w.writeheader()
+    w.writerows(existing)
+
     payload = {
-        "message": f"Board snapshot {season} week {week}",
-        "content": base64.b64encode(csv_text.encode()).decode(),
+        "message": f"Board snapshot {season} wk{week}: +{added} game(s)",
+        "content": base64.b64encode(buf.getvalue().encode()).decode(),
     }
     if sha:
         payload["sha"] = sha
     r = requests.put(f"{API}/repos/{repo}/contents/{path}",
                      headers=_headers(token), json=payload, timeout=timeout)
     r.raise_for_status()
-    return "updated" if sha else "created"
+    return added, skipped
 
 
 def list_saved(repo: str, token: str, season: int | None = None,
