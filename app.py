@@ -1,0 +1,363 @@
+"""Billy Walters NFL model — Streamlit app.
+
+Tabs: Walters Board | History & Edge Analysis
+Run:  streamlit run app.py
+"""
+import datetime as dt
+
+import pandas as pd
+import streamlit as st
+
+from walters.pipeline import run_week
+from walters.scoring import BOOK_FACTOR_SCALE
+from walters.datasources import sonnymoore, odds as odds_api, injuries as inj_api
+from walters import history as hist
+from walters import snapshots as snap
+
+st.set_page_config(page_title="Walters NFL Model", page_icon="🏈", layout="wide")
+
+BOARD_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Mono:wght@500;700&display=swap');
+html, body, [data-testid="stAppViewContainer"] { background: #000 !important; }
+h1 { font-family: 'VT323', monospace !important; color: #ffbf00 !important;
+     letter-spacing: 2px; font-size: 3rem !important; }
+[data-testid="stMetricValue"] { font-family: 'VT323', monospace;
+     color: #00e63c; font-size: 2.6rem; }
+[data-testid="stMetricLabel"] { color: #7a7a7a; }
+button[data-baseweb="tab"] { font-family: 'VT323', monospace;
+     font-size: 1.3rem; color: #00e63c; }
+button[data-baseweb="tab"][aria-selected="true"] { color: #ffbf00; }
+.board { width: 100%; border-collapse: collapse;
+     font-family: 'IBM Plex Mono', monospace; font-size: 0.86rem;
+     background: #000; }
+.board th { color: #7a7a7a; text-align: left; font-weight: 500;
+     border-bottom: 1px solid #262626; padding: 4px 10px;
+     font-size: 0.72rem; }
+.board td { padding: 5px 10px; border-bottom: 1px solid #141414;
+     color: #ffbf00; font-weight: 700; white-space: nowrap; }
+.board td.team { color: #00e63c; }
+.board td.neg { color: #ff3b30; }
+.board td.sig { color: #00e63c; }
+.board td.dim { color: #555; font-weight: 500; }
+.board tr:hover td { background: #0d0d0d; }
+</style>
+"""
+st.markdown(BOARD_CSS, unsafe_allow_html=True)
+
+
+def board_table(df, team_cols=(), signal_cols=(), dim_cols=()):
+    """Render a dataframe as a Vegas-board HTML table."""
+    import html as _html
+    head = "".join(f"<th>{_html.escape(str(c))}</th>" for c in df.columns)
+    rows = []
+    for _, row in df.iterrows():
+        cells = []
+        for c in df.columns:
+            v = row[c]
+            txt = "" if v is None or (isinstance(v, float) and pd.isna(v)) else v
+            if isinstance(txt, float):
+                txt = f"{txt:+.1f}" if c not in ("Injuries",) else f"{txt:.0f}"
+            txt = _html.escape(str(txt))
+            cls = ""
+            if c in team_cols:
+                cls = "team"
+            elif c in signal_cols and str(v).strip():
+                cls = "sig"
+            elif c in dim_cols:
+                cls = "dim"
+            elif isinstance(v, (int, float)) and not isinstance(v, bool) and v < 0:
+                cls = "neg"
+            cells.append(f'<td class="{cls}">{txt}</td>')
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    st.markdown(f'<table class="board"><thead><tr>{head}</tr></thead>'
+                f'<tbody>{"".join(rows)}</tbody></table>',
+                unsafe_allow_html=True)
+
+
+st.title("🏈 BILLY WALTERS NFL BOARD")
+
+with st.sidebar:
+    st.header("Run settings")
+    today = dt.date.today()
+    default_season = today.year if today.month >= 8 else today.year - 1
+    season = st.number_input("Season", 2020, 2035, default_season)
+    week = st.number_input("Week", 1, 18, 1)
+    hfa = st.slider("Home field advantage (pts)", 0.0, 4.0, 1.9, 0.1)
+    scale = st.radio("Factor weighting",
+                     ["Book spec (units ÷ 5)", "Legacy raw (spreadsheet)"])
+    factor_scale = BOOK_FACTOR_SCALE if scale.startswith("Book") else 1.0
+
+    st.divider()
+    st.header("Super Bowl carryover")
+    from walters.teams import TEAMS as _T
+    _opts = ["(none)"] + sorted(_T)
+    sb_winner = st.selectbox("Last SB winner", _opts, index=_opts.index("SEA"))
+    sb_loser = st.selectbox("Last SB loser", _opts, index=_opts.index("NE"))
+    sb_winner = "" if sb_winner == "(none)" else sb_winner
+    sb_loser = "" if sb_loser == "(none)" else sb_loser
+
+    st.divider()
+    st.header("Data sources")
+    use_sonny = st.checkbox("Use Sonny Moore ratings", True,
+        help="The power-rating source. Note: he may serve last season's "
+             "final ratings until after Week 1.")
+
+    use_weather = st.checkbox("Fetch weather (Open-Meteo)", True)
+    use_injuries = st.checkbox("Fetch injury reports (ESPN)", True)
+
+    odds_key = st.text_input("The Odds API key (optional)", type="password")
+
+
+run = st.button("▶ Run model", type="primary", use_container_width=True)
+
+if not run:
+    st.info("Set the week and hit **Run model**. No keys needed for the "
+            "defaults; The Odds API key improves market lines.")
+    st.stop()
+
+prog = st.progress(0, "Power ratings…")
+warnings = []
+
+sonny_r = None
+if use_sonny:
+    try:
+        sonny_r = sonnymoore.fetch()
+    except Exception as e:
+        warnings.append(f"Sonny Moore fetch failed: {e}")
+
+prog.progress(20, "Odds…")
+
+odds_lookup = None
+if odds_key.strip():
+    try:
+        odds_lookup = odds_api.fetch(odds_key.strip())
+    except Exception as e:
+        warnings.append(f"Odds API failed: {e} — using ESPN lines.")
+prog.progress(35, "Injuries…")
+
+injuries = {}
+if use_injuries:
+    injuries = inj_api.fetch()
+    if not injuries:
+        warnings.append("Injury fetch returned nothing — reports unavailable.")
+prog.progress(60, "Schedule, weather, scoring…")
+
+if not sonny_r:
+    for w in warnings:
+        st.warning(w)
+    st.error("No ratings source available — enable Sonny Moore in the sidebar.")
+    st.stop()
+
+try:
+    results = run_week(int(season), int(week), None, sonny_r,
+                       odds_lookup=odds_lookup, hfa=hfa,
+                       factor_scale=factor_scale,
+                       sb_winner=sb_winner.strip().upper() or None,
+                       sb_loser=sb_loser.strip().upper() or None,
+                       fetch_weather=use_weather, injuries=injuries)
+except Exception as e:
+    st.error(f"Pipeline failed: {e}")
+    st.stop()
+prog.progress(100, "Done")
+
+for w in warnings:
+    st.warning(w)
+unknown_venues = [r["venue"] for r in results
+                  if r["neutral_site"] and not r.get("venue_recognized", True)]
+if unknown_venues:
+    st.warning("Unrecognized international venue(s) — travel factors "
+               "skipped: " + ", ".join(sorted(set(unknown_venues))) +
+               ". Add coordinates to INTL_VENUES in walters/teams.py.")
+if not results:
+    st.info("No games found for that season/week.")
+    st.stop()
+
+tab_w, tab_hist = st.tabs(["🏈 Walters Board", "📊 History & Edge Analysis"])
+
+# --- Tab 1: Walters ----------------------------------------------------------
+with tab_w:
+    def bet_str(r):
+        m = r["market_home_spread"]
+        if not r["bet_side"] or m is None:
+            return ""
+        line = m if r["bet_side"] == r["home"] else -m
+        return f"{r['bet_side']} {line:+.1f}"
+
+    rows = []
+    for r in results:
+        flags = []
+        if r["qb_flag"]:
+            flags.append("🚑 QB")
+        if r["neutral_site"]:
+            flags.append("🌍 INTL")
+            if not r.get("venue_recognized", True):
+                flags.append("⚠️ VENUE?")
+        rows.append({
+            "Away": r["away"], "Home": r["home"], "Day": r["game_day"],
+            "Walters (Home)": r["walters_home_line"],
+            "Market (Home)": r["market_home_spread"],
+            "Edge": r["edge"], "Bet": bet_str(r),
+            "Flags": " ".join(flags),
+            "Injuries": r["injury_count"],
+        })
+    df = pd.DataFrame(rows)
+    df["_absedge"] = df["Edge"].abs()
+    df = df.sort_values("_absedge", ascending=False,
+                        na_position="last").drop(columns="_absedge")
+    hide_qb = st.checkbox("High-confidence only (hide QB-injury games)", False)
+    view = df[~df["Flags"].str.contains("QB")] if hide_qb else df
+    top = df[df["Bet"] != ""].head(3)
+    if len(top):
+        st.markdown("#### 🔥 TOP PLAYS")
+        tcols = st.columns(len(top))
+        for tc, (_, tr) in zip(tcols, top.iterrows()):
+            tc.metric(f"{tr['Away']} @ {tr['Home']}", tr["Bet"],
+                      f"edge {tr['Edge']:+.1f}")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Games", len(df))
+    c2.metric("Edges ≥ 1 pt", int((df["Bet"] != "").sum()))
+    c3.metric("QB-flagged", int(df["Flags"].str.contains("QB").sum()))
+    board_table(view, team_cols=("Away", "Home", "Bet"),
+                signal_cols=("Bet",), dim_cols=("Day", "Flags"))
+
+    st.subheader("Game detail")
+    for r in sorted(results, key=lambda x: -(abs(x["edge"]) if x["edge"] is not None else -1)):
+        label = f"{r['away']} @ {r['home']} — Walters {r['walters_home_line']:+.1f}"
+        if r["bet_side"]:
+            label += f" → BET {r['bet_side']} ({r['edge']:+.1f})"
+        if r["qb_flag"]:
+            label += "  🚑"
+        with st.expander(label):
+            if r["factors"]:
+                st.table(pd.DataFrame(r["factors"],
+                                      columns=["Factor", "Units", "Credits"]))
+            for side, plist in (("Home", r["injuries_home"]),
+                                ("Away", r["injuries_away"])):
+                if plist:
+                    st.caption(f"{side} injuries: " + "; ".join(
+                        f"{p['name']} ({p['position']}, {p['status']})"
+                        for p in plist))
+
+    st.divider()
+    st.markdown("##### Save this week's board")
+    st.caption("A board saved before kickoff is the only bias-free record of "
+               "what the model predicted.")
+    gh_token = st.secrets.get("github_token", "")
+    gh_repo = st.secrets.get("github_repo", "")
+    sc1, sc2 = st.columns([2, 1])
+    with sc2:
+        st.download_button("⬇ Download CSV", df.to_csv(index=False).encode(),
+                           file_name=f"walters_{season}_wk{week}.csv",
+                           mime="text/csv", use_container_width=True)
+    with sc1:
+        if gh_token and gh_repo:
+            existing_sha = None
+            try:
+                existing_sha, _ = snap.get_existing(
+                    gh_repo, gh_token, snap.path_for(int(season), int(week)))
+            except Exception:
+                pass
+            if existing_sha:
+                st.info(f"Week {int(week)} is already saved — the earliest "
+                        "save is the honest one.")
+                overwrite = st.checkbox("Overwrite it anyway", False)
+            else:
+                overwrite = False
+            if st.button("💾 Save board to repo", type="primary",
+                         use_container_width=True):
+                try:
+                    status = snap.save(gh_repo, gh_token, int(season),
+                                       int(week), df.to_csv(index=False),
+                                       overwrite=overwrite)
+                    if status == "exists":
+                        st.warning("Already saved — tick overwrite to replace.")
+                    else:
+                        st.success(f"Saved to {gh_repo} "
+                                   f"({snap.path_for(int(season), int(week))}).")
+                except Exception as e:
+                    st.error(f"Save failed: {e}")
+        else:
+            st.info("Add `github_token` and `github_repo` in the app's "
+                    "Streamlit **Secrets** to enable one-click saving "
+                    "(setup steps are in walters/snapshots.py).")
+
+# --- Tab 2: History & Edge Analysis -----------------------------------------
+with tab_hist:
+    gh_token = st.secrets.get("github_token", "")
+    gh_repo = st.secrets.get("github_repo", "")
+    saved = []
+    if gh_token and gh_repo:
+        try:
+            saved = snap.list_saved(gh_repo, gh_token, int(season))
+        except Exception as e:
+            st.warning(f"Could not read saved boards: {e}")
+
+    if saved:
+        graded_s = hist.grade_snapshots(int(season), saved)
+        st.success(f"Grading {len(saved)} saved board(s) — no look-ahead bias.")
+        if graded_s:
+            o = hist.overall(graded_s)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Record", f"{o['W']}-{o['L']}" + (f"-{o['P']}" if o['P'] else ""))
+            c2.metric("Win %", f"{o['win_pct']}%" if o['win_pct'] is not None else "—")
+            c3.metric("Units (-110)", f"{o['units']:+.2f}")
+            c4.metric("Breakeven", f"{o['breakeven']}%")
+            st.subheader("Win % by edge size (saved boards)")
+            bs = pd.DataFrame(hist.bucket_stats(graded_s))
+            board_table(bs, dim_cols=("bucket",))
+            ch = bs.dropna(subset=["win_pct"]).set_index("bucket")
+            if len(ch):
+                st.bar_chart(ch["win_pct"])
+            st.subheader("Graded picks")
+            board_table(pd.DataFrame(graded_s),
+                        team_cols=("away", "home", "bet"),
+                        signal_cols=("result",), dim_cols=("week", "score"))
+        else:
+            st.info("Saved boards found, but none of those games have "
+                    "finished yet.")
+        st.divider()
+        st.markdown("##### Backtest (current ratings — look-ahead bias)")
+
+    st.caption("Re-runs the model for completed weeks and grades every pick "
+               "against the closing number from ESPN.")
+    if week <= 1:
+        st.info("No completed weeks yet this season. Come back after Week 1 "
+                "and this fills in automatically.")
+    else:
+        weeks = list(range(1, int(week)))
+        with st.spinner(f"Grading weeks 1–{weeks[-1]}…"):
+            graded = hist.grade_weeks(int(season), weeks, sonny_r, hfa,
+                                      factor_scale,
+                                      sb_winner.strip().upper() or None,
+                                      sb_loser.strip().upper() or None)
+        if not graded:
+            st.info("No graded games yet.")
+        else:
+            o = hist.overall(graded)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Record", f"{o['W']}-{o['L']}" + (f"-{o['P']}" if o['P'] else ""))
+            c2.metric("Win %", f"{o['win_pct']}%" if o['win_pct'] is not None else "—")
+            c3.metric("Units (-110)", f"{o['units']:+.2f}")
+            c4.metric("Breakeven", f"{o['breakeven']}%")
+
+            st.subheader("Does a bigger edge mean a better record?")
+            bstats = pd.DataFrame(hist.bucket_stats(graded))
+            board_table(bstats, dim_cols=("bucket",))
+            chartable = bstats.dropna(subset=["win_pct"]).set_index("bucket")
+            if len(chartable):
+                st.bar_chart(chartable["win_pct"])
+                st.caption("Breakeven at -110 juice is 52.4%. A rising line "
+                           "left-to-right is the result you want; a flat or "
+                           "falling one means edge size is not predictive.")
+
+            st.subheader("Every graded pick")
+            board_table(pd.DataFrame(graded), team_cols=("away", "home", "bet"),
+                        signal_cols=("result",), dim_cols=("week", "score"))
+
+            st.warning(
+                "**Look-ahead bias:** ratings are fetched current, not as-of "
+                "each week, so Sonny Moore's numbers already reflect results "
+                "the model is being graded on. These figures flatter the "
+                "record — use the weekly CSV snapshots for an honest forward "
+                "test.")
