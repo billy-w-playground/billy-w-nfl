@@ -202,11 +202,28 @@ with tab_w:
             "Injuries": r["injury_count"],
         })
     df = pd.DataFrame(rows)
+    _tok = st.secrets.get("github_token", "")
+    _repo = st.secrets.get("github_repo", "")
+    already = set()
+    if _tok and _repo:
+        try:
+            already = snap.saved_games(_repo, _tok, int(season), int(week))
+        except Exception:
+            already = set()
+    df["Saved"] = ["✓" if (a, h) in already else ""
+                   for a, h in zip(df["Away"], df["Home"])]
     df["_absedge"] = df["Edge"].abs()
     df = df.sort_values("_absedge", ascending=False,
                         na_position="last").drop(columns="_absedge")
-    hide_qb = st.checkbox("High-confidence only (hide QB-injury games)", False)
-    view = df[~df["Flags"].str.contains("QB")] if hide_qb else df
+    fc1, fc2 = st.columns(2)
+    hide_qb = fc1.checkbox("High-confidence only (hide QB-injury games)", False)
+    hide_saved = fc2.checkbox("Hide games already saved", False,
+                              disabled=not already)
+    view = df
+    if hide_qb:
+        view = view[~view["Flags"].str.contains("QB")]
+    if hide_saved:
+        view = view[view["Saved"] == ""]
     top = df[df["Bet"] != ""].head(3)
     if len(top):
         st.markdown("#### 🔥 TOP PLAYS")
@@ -252,31 +269,35 @@ with tab_w:
                            mime="text/csv", use_container_width=True)
     with sc1:
         if gh_token and gh_repo:
-            existing_sha = None
-            try:
-                existing_sha, _ = snap.get_existing(
-                    gh_repo, gh_token, snap.path_for(int(season), int(week)))
-            except Exception:
-                pass
-            if existing_sha:
-                st.info(f"Week {int(week)} is already saved — the earliest "
-                        "save is the honest one.")
-                overwrite = st.checkbox("Overwrite it anyway", False)
+            unsaved = df[df["Saved"] == ""]
+            days = list(dict.fromkeys(unsaved["Day"].tolist()))
+            if not days:
+                st.success("Every game this week is already saved.")
             else:
-                overwrite = False
-            if st.button("💾 Save board to repo", type="primary",
-                         use_container_width=True):
-                try:
-                    status = snap.save(gh_repo, gh_token, int(season),
-                                       int(week), df.to_csv(index=False),
-                                       overwrite=overwrite)
-                    if status == "exists":
-                        st.warning("Already saved — tick overwrite to replace.")
-                    else:
-                        st.success(f"Saved to {gh_repo} "
-                                   f"({snap.path_for(int(season), int(week))}).")
-                except Exception as e:
-                    st.error(f"Save failed: {e}")
+                day_counts = {d: int((unsaved["Day"] == d).sum()) for d in days}
+                picks = st.multiselect(
+                    "Which slate(s) to save now?",
+                    options=days, default=days,
+                    format_func=lambda d: f"{d} ({day_counts[d]} game"
+                                          f"{'s' if day_counts[d] != 1 else ''})",
+                    help="Save each slate before its kickoff. Games already "
+                         "saved are never overwritten.")
+                sel = unsaved[unsaved["Day"].isin(picks)]
+                if st.button(f"💾 Save {len(sel)} game(s) to repo",
+                             type="primary", use_container_width=True,
+                             disabled=sel.empty):
+                    try:
+                        cols = [c for c in df.columns if not c.startswith("_")]
+                        added, skipped = snap.save_incremental(
+                            gh_repo, gh_token, int(season), int(week),
+                            sel[cols].to_dict("records"), cols)
+                        if added:
+                            st.success(f"Saved {added} game(s) to "
+                                       f"{snap.path_for(int(season), int(week))}.")
+                        else:
+                            st.info("Nothing new to save.")
+                    except Exception as e:
+                        st.error(f"Save failed: {e}")
         else:
             st.info("Add `github_token` and `github_repo` in the app's "
                     "Streamlit **Secrets** to enable one-click saving "
