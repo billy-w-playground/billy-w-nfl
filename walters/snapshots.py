@@ -17,6 +17,7 @@ Setup (one time):
 """
 from __future__ import annotations
 import base64
+from pathlib import Path
 
 import requests
 
@@ -106,6 +107,24 @@ def save_incremental(repo: str, token: str, season: int, week: int,
                      headers=_headers(token), json=payload, timeout=timeout)
     r.raise_for_status()
     return added, skipped
+
+
+def list_saved_local(season: int | None = None) -> list[tuple[int, str]]:
+    """Saved boards already committed to the repo are on local disk."""
+    d = Path(__file__).resolve().parent.parent / DIR
+    out = []
+    if not d.is_dir():
+        return out
+    for p in sorted(d.glob("*.csv")):
+        try:
+            seas, wk = p.stem.split("_wk")
+            seas, wk = int(seas), int(wk)
+        except ValueError:
+            continue
+        if season is not None and seas != season:
+            continue
+        out.append((wk, p.read_text(encoding="utf-8-sig")))
+    return sorted(out)
 
 
 def list_saved(repo: str, token: str, season: int | None = None,
