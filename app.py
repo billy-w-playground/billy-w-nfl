@@ -111,67 +111,89 @@ with st.sidebar:
 
 run = st.button("▶ Run model", type="primary", use_container_width=True)
 
-if not run:
+# Streamlit reruns this whole script on ANY widget interaction (a checkbox,
+# deleting a chip from a multiselect). Results therefore live in
+# st.session_state so the board survives those reruns instead of vanishing
+# and forcing another fetch.
+if run:
+    st.session_state.pop("run_data", None)
+
+if not run and "run_data" not in st.session_state:
     st.info("Set the week and hit **Run model**. No keys needed for the "
             "defaults; The Odds API key improves market lines.")
     st.stop()
 
-prog = st.progress(0, "Power ratings…")
-warnings = []
+if not run:
+    _d = st.session_state["run_data"]
+    results = _d["results"]
+    sonny_r = _d["sonny_r"]
+    season, week = _d["season"], _d["week"]
+    hfa, factor_scale = _d["hfa"], _d["factor_scale"]
+    sb_winner, sb_loser = _d["sb_winner"], _d["sb_loser"]
+    st.caption(f"Showing saved run: {season} week {week}. "
+               "Hit **Run model** to refresh.")
+else:
+    prog = st.progress(0, "Power ratings…")
+    warnings = []
 
-sonny_r = None
-if use_sonny:
+    sonny_r = None
+    if use_sonny:
+        try:
+            sonny_r = sonnymoore.fetch()
+        except Exception as e:
+            warnings.append(f"Sonny Moore fetch failed: {e}")
+
+    prog.progress(20, "Odds…")
+
+    odds_lookup = None
+    if odds_key.strip():
+        try:
+            odds_lookup = odds_api.fetch(odds_key.strip())
+        except Exception as e:
+            warnings.append(f"Odds API failed: {e} — using ESPN lines.")
+    prog.progress(35, "Injuries…")
+
+    injuries = {}
+    if use_injuries:
+        injuries = inj_api.fetch()
+        if not injuries:
+            warnings.append("Injury fetch returned nothing — reports unavailable.")
+    prog.progress(60, "Schedule, weather, scoring…")
+
+    if not sonny_r:
+        for w in warnings:
+            st.warning(w)
+        st.error("No ratings source available — enable Sonny Moore in the sidebar.")
+        st.stop()
+
     try:
-        sonny_r = sonnymoore.fetch()
+        results = run_week(int(season), int(week), None, sonny_r,
+                           odds_lookup=odds_lookup, hfa=hfa,
+                           factor_scale=factor_scale,
+                           sb_winner=sb_winner.strip().upper() or None,
+                           sb_loser=sb_loser.strip().upper() or None,
+                           fetch_weather=use_weather, injuries=injuries)
     except Exception as e:
-        warnings.append(f"Sonny Moore fetch failed: {e}")
+        st.error(f"Pipeline failed: {e}")
+        st.stop()
+    prog.progress(100, "Done")
 
-prog.progress(20, "Odds…")
-
-odds_lookup = None
-if odds_key.strip():
-    try:
-        odds_lookup = odds_api.fetch(odds_key.strip())
-    except Exception as e:
-        warnings.append(f"Odds API failed: {e} — using ESPN lines.")
-prog.progress(35, "Injuries…")
-
-injuries = {}
-if use_injuries:
-    injuries = inj_api.fetch()
-    if not injuries:
-        warnings.append("Injury fetch returned nothing — reports unavailable.")
-prog.progress(60, "Schedule, weather, scoring…")
-
-if not sonny_r:
     for w in warnings:
         st.warning(w)
-    st.error("No ratings source available — enable Sonny Moore in the sidebar.")
-    st.stop()
+    unknown_venues = [r["venue"] for r in results
+                      if r["neutral_site"] and not r.get("venue_recognized", True)]
+    if unknown_venues:
+        st.warning("Unrecognized international venue(s) — travel factors "
+                   "skipped: " + ", ".join(sorted(set(unknown_venues))) +
+                   ". Add coordinates to INTL_VENUES in walters/teams.py.")
+    if not results:
+        st.info("No games found for that season/week.")
+        st.stop()
 
-try:
-    results = run_week(int(season), int(week), None, sonny_r,
-                       odds_lookup=odds_lookup, hfa=hfa,
-                       factor_scale=factor_scale,
-                       sb_winner=sb_winner.strip().upper() or None,
-                       sb_loser=sb_loser.strip().upper() or None,
-                       fetch_weather=use_weather, injuries=injuries)
-except Exception as e:
-    st.error(f"Pipeline failed: {e}")
-    st.stop()
-prog.progress(100, "Done")
-
-for w in warnings:
-    st.warning(w)
-unknown_venues = [r["venue"] for r in results
-                  if r["neutral_site"] and not r.get("venue_recognized", True)]
-if unknown_venues:
-    st.warning("Unrecognized international venue(s) — travel factors "
-               "skipped: " + ", ".join(sorted(set(unknown_venues))) +
-               ". Add coordinates to INTL_VENUES in walters/teams.py.")
-if not results:
-    st.info("No games found for that season/week.")
-    st.stop()
+    st.session_state["run_data"] = dict(
+        results=results, sonny_r=sonny_r, season=int(season), week=int(week),
+        hfa=hfa, factor_scale=factor_scale,
+        sb_winner=sb_winner, sb_loser=sb_loser)
 
 tab_w, tab_hist = st.tabs(["🏈 Walters Board", "📊 History & Edge Analysis"])
 
