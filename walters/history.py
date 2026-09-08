@@ -35,7 +35,7 @@ def grade_pick(bet_side: str, home: str, away: str, market_home_spread: float,
 def grade_weeks(season: int, weeks: list[int], sonny: dict[str, float],
                 hfa: float, factor_scale: float,
                 sb_winner: str | None, sb_loser: str | None,
-                repo: str = "", file_only: bool = True) -> list[dict]:
+                repo: str = "") -> list[dict]:
     """Re-run and grade every completed game in the given weeks.
 
     If a week has a committed ratings file (ratings/<season>_wk<NN>.csv), it
@@ -46,7 +46,7 @@ def grade_weeks(season: int, weeks: list[int], sonny: dict[str, float],
     graded: list[dict] = []
     for wk in weeks:
         file_r = load_from_repo(repo, season, wk) if repo else None
-        wk_sonny = None if (file_r and file_only) else sonny
+        wk_sonny = None if file_r else sonny
         if not file_r and not wk_sonny:
             continue
         try:
