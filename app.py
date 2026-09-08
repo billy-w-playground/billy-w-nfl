@@ -100,15 +100,9 @@ with st.sidebar:
 
     st.divider()
     st.header("Data sources")
-    file_mode = st.radio(
-        "If a weekly ratings file exists",
-        ["Use the file alone", "Blend with Sonny Moore"], index=0,
-        help="Commit ratings/<season>_wk<NN>.csv to the repo (Massey export "
-             "or Team,Rating). That week then uses it — including when the "
-             "History tab re-grades that week.")
-    use_sonny = st.checkbox("Use Sonny Moore ratings", True,
-        help="The power-rating source. Note: he may serve last season's "
-             "final ratings until after Week 1.")
+    st.caption("Ratings: a committed `ratings/<season>_wk<NN>.csv` is used "
+               "for that week; every other week uses Sonny Moore "
+               "automatically.")
 
     use_weather = st.checkbox("Fetch weather (Open-Meteo)", True)
     use_injuries = st.checkbox("Fetch injury reports (ESPN)", True)
@@ -134,7 +128,6 @@ if not run:
     _d = st.session_state["run_data"]
     results = _d["results"]
     sonny_r = _d["sonny_r"]
-    file_mode = _d.get("file_mode", "Use the file alone")
     season, week = _d["season"], _d["week"]
     hfa, factor_scale = _d["hfa"], _d["factor_scale"]
     sb_winner, sb_loser = _d["sb_winner"], _d["sb_loser"]
@@ -145,20 +138,20 @@ else:
     warnings = []
 
     gh_repo_cfg = st.secrets.get("github_repo", "")
+    # A committed ratings file wins for that week; otherwise Sonny Moore.
+    # No toggle — the file's presence IS the choice. Read straight from the
+    # repo checkout, so no secrets are involved.
     file_r = ratings_files.load_from_repo(gh_repo_cfg, int(season), int(week))
 
     sonny_r = None
-    if use_sonny and not (file_r and file_mode == "Use the file alone"):
+    if file_r:
+        st.success(f"Ratings: {ratings_files.path_for(int(season), int(week))} "
+                   f"({len(file_r)} teams).")
+    else:
         try:
             sonny_r = sonnymoore.fetch()
         except Exception as e:
             warnings.append(f"Sonny Moore fetch failed: {e}")
-    if file_r:
-        src = ("file only" if file_mode == "Use the file alone"
-               else "file + Sonny Moore")
-        st.success(f"Using committed ratings "
-                   f"{ratings_files.path_for(int(season), int(week))} "
-                   f"({len(file_r)} teams, {src}).")
 
     prog.progress(20, "Odds…")
 
@@ -180,8 +173,11 @@ else:
     if not sonny_r and not file_r:
         for w in warnings:
             st.warning(w)
-        st.error("No ratings source — enable Sonny Moore or commit "
-                 f"{ratings_files.path_for(int(season), int(week))} to the repo.")
+        st.error(
+            "No ratings available: Sonny Moore's fetch failed and there is no "
+            "`" + ratings_files.path_for(int(season), int(week)) + "` in the "
+            "repo. Commit that file (exact path, lowercase, zero-padded week) "
+            "and rerun.")
         st.stop()
 
     try:
@@ -209,8 +205,7 @@ else:
         st.stop()
 
     st.session_state["run_data"] = dict(
-        results=results, sonny_r=sonny_r, file_mode=file_mode,
-        season=int(season), week=int(week),
+        results=results, sonny_r=sonny_r, season=int(season), week=int(week),
         hfa=hfa, factor_scale=factor_scale,
         sb_winner=sb_winner, sb_loser=sb_loser)
 
@@ -348,8 +343,8 @@ with tab_w:
 with tab_hist:
     gh_token = st.secrets.get("github_token", "")
     gh_repo = st.secrets.get("github_repo", "")
-    saved = []
-    if gh_token and gh_repo:
+    saved = snap.list_saved_local(int(season))
+    if not saved and gh_token and gh_repo:
         try:
             saved = snap.list_saved(gh_repo, gh_token, int(season))
         except Exception as e:
@@ -393,8 +388,7 @@ with tab_hist:
                                       factor_scale,
                                       sb_winner.strip().upper() or None,
                                       sb_loser.strip().upper() or None,
-                                      repo=st.secrets.get("github_repo", ""),
-                                      file_only=(file_mode == "Use the file alone"))
+                                      repo=st.secrets.get("github_repo", ""))
         if not graded:
             st.info("No graded games yet.")
         else:
