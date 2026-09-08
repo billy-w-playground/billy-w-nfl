@@ -34,12 +34,23 @@ def grade_pick(bet_side: str, home: str, away: str, market_home_spread: float,
 
 def grade_weeks(season: int, weeks: list[int], sonny: dict[str, float],
                 hfa: float, factor_scale: float,
-                sb_winner: str | None, sb_loser: str | None) -> list[dict]:
-    """Re-run and grade every completed game in the given weeks."""
+                sb_winner: str | None, sb_loser: str | None,
+                repo: str = "", file_only: bool = True) -> list[dict]:
+    """Re-run and grade every completed game in the given weeks.
+
+    If a week has a committed ratings file (ratings/<season>_wk<NN>.csv), it
+    is used for that week — those weeks are graded with the ratings the model
+    actually had, so they carry NO look-ahead bias."""
+    from .ratings import load_from_repo
+
     graded: list[dict] = []
     for wk in weeks:
+        file_r = load_from_repo(repo, season, wk) if repo else None
+        wk_sonny = None if (file_r and file_only) else sonny
+        if not file_r and not wk_sonny:
+            continue
         try:
-            results = run_week(season, wk, None, sonny, odds_lookup=None,
+            results = run_week(season, wk, file_r, wk_sonny, odds_lookup=None,
                                hfa=hfa, factor_scale=factor_scale,
                                sb_winner=sb_winner, sb_loser=sb_loser,
                                fetch_weather=False, injuries={})
@@ -54,7 +65,8 @@ def grade_weeks(season: int, weeks: list[int], sonny: dict[str, float],
             if res is None:
                 continue
             graded.append(dict(
-                week=wk, away=r["away"], home=r["home"],
+                week=wk, ratings="file" if file_r else "current",
+                away=r["away"], home=r["home"],
                 bet=r["bet_side"], edge=r["edge"],
                 walters=r["walters_home_line"],
                 market=r["market_home_spread"],
