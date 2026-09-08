@@ -13,6 +13,7 @@ from walters.scoring import BOOK_FACTOR_SCALE
 from walters.datasources import sonnymoore, odds as odds_api, injuries as inj_api
 from walters import history as hist
 from walters import snapshots as snap
+from walters import ratings as ratings_files
 
 st.set_page_config(page_title="Walters NFL Model", page_icon="🏈", layout="wide")
 
@@ -99,6 +100,12 @@ with st.sidebar:
 
     st.divider()
     st.header("Data sources")
+    file_mode = st.radio(
+        "If a weekly ratings file exists",
+        ["Use the file alone", "Blend with Sonny Moore"], index=0,
+        help="Commit ratings/<season>_wk<NN>.csv to the repo (Massey export "
+             "or Team,Rating). That week then uses it — including when the "
+             "History tab re-grades that week.")
     use_sonny = st.checkbox("Use Sonny Moore ratings", True,
         help="The power-rating source. Note: he may serve last season's "
              "final ratings until after Week 1.")
@@ -127,6 +134,7 @@ if not run:
     _d = st.session_state["run_data"]
     results = _d["results"]
     sonny_r = _d["sonny_r"]
+    file_mode = _d.get("file_mode", "Use the file alone")
     season, week = _d["season"], _d["week"]
     hfa, factor_scale = _d["hfa"], _d["factor_scale"]
     sb_winner, sb_loser = _d["sb_winner"], _d["sb_loser"]
@@ -136,12 +144,21 @@ else:
     prog = st.progress(0, "Power ratings…")
     warnings = []
 
+    gh_repo_cfg = st.secrets.get("github_repo", "")
+    file_r = ratings_files.load_from_repo(gh_repo_cfg, int(season), int(week))
+
     sonny_r = None
-    if use_sonny:
+    if use_sonny and not (file_r and file_mode == "Use the file alone"):
         try:
             sonny_r = sonnymoore.fetch()
         except Exception as e:
             warnings.append(f"Sonny Moore fetch failed: {e}")
+    if file_r:
+        src = ("file only" if file_mode == "Use the file alone"
+               else "file + Sonny Moore")
+        st.success(f"Using committed ratings "
+                   f"{ratings_files.path_for(int(season), int(week))} "
+                   f"({len(file_r)} teams, {src}).")
 
     prog.progress(20, "Odds…")
 
@@ -160,14 +177,15 @@ else:
             warnings.append("Injury fetch returned nothing — reports unavailable.")
     prog.progress(60, "Schedule, weather, scoring…")
 
-    if not sonny_r:
+    if not sonny_r and not file_r:
         for w in warnings:
             st.warning(w)
-        st.error("No ratings source available — enable Sonny Moore in the sidebar.")
+        st.error("No ratings source — enable Sonny Moore or commit "
+                 f"{ratings_files.path_for(int(season), int(week))} to the repo.")
         st.stop()
 
     try:
-        results = run_week(int(season), int(week), None, sonny_r,
+        results = run_week(int(season), int(week), file_r, sonny_r,
                            odds_lookup=odds_lookup, hfa=hfa,
                            factor_scale=factor_scale,
                            sb_winner=sb_winner.strip().upper() or None,
@@ -191,7 +209,8 @@ else:
         st.stop()
 
     st.session_state["run_data"] = dict(
-        results=results, sonny_r=sonny_r, season=int(season), week=int(week),
+        results=results, sonny_r=sonny_r, file_mode=file_mode,
+        season=int(season), week=int(week),
         hfa=hfa, factor_scale=factor_scale,
         sb_winner=sb_winner, sb_loser=sb_loser)
 
@@ -373,7 +392,9 @@ with tab_hist:
             graded = hist.grade_weeks(int(season), weeks, sonny_r, hfa,
                                       factor_scale,
                                       sb_winner.strip().upper() or None,
-                                      sb_loser.strip().upper() or None)
+                                      sb_loser.strip().upper() or None,
+                                      repo=st.secrets.get("github_repo", ""),
+                                      file_only=(file_mode == "Use the file alone"))
         if not graded:
             st.info("No graded games yet.")
         else:
