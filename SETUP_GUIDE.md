@@ -59,9 +59,14 @@ Boards saved before kickoff don't. To let the app save them into your repo:
        github_token = "github_pat_...your token..."
        github_repo  = "billy-w-playground/formula-nfl"
 
-3. Rerun. The Walters tab now shows *** Save board to repo**. Hit it each
-   week before kickoff; boards land in `history/2026_wk01.csv`, and the
-   History tab grades them automatically once games finish.
+3. Rerun. The Walters tab now shows a slate picker and a **Save to repo**
+   button. Boards land in `history/2026_wk01.csv` and the History tab grades
+   them automatically once games finish.
 
-The first save for a week wins — the app warns instead of silently
-overwriting, because a board re-saved after kickoff is no longer a prediction.
+**Saving across a week.** A week's games kick off on different days, so save
+each slate before it plays: Tuesday save the Thursday game, Sunday morning
+save the Sunday slate, Sunday night save the Monday game. The slate picker
+defaults to whatever is still unsaved, saved games show a ✓ on the board, and
+a checkbox hides them. Merging is per game and the FIRST snapshot always
+wins — a rerun after results are known can never overwrite a real
+prediction.
