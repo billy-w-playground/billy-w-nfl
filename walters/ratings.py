@@ -1,31 +1,24 @@
-"""Per-week power-rating files committed to the repo.
+"""Per-week power ratings committed to the repo.
 
-Sonny Moore is the automatic source, but early in the season his page still
-serves last season's final numbers, and some weeks you may simply trust a
-different rating. Drop a CSV at:
+Streamlit Cloud clones the repo onto the server, so any file committed at
+  ratings/massey_<season>_wk<NN>.csv        e.g. ratings/massey_2026_wk01.csv
+is readable by the app at run time. Drop a Massey export in that folder and
+the app uses it for that week — useful early season when Sonny Moore is
+still serving last season's final ratings.
 
-    ratings/<season>_wk<NN>.csv        e.g. ratings/2026_wk01.csv
-
-and the app uses it for that week instead of (or blended with) Sonny Moore.
-
-Because the file is keyed to the week, the History tab re-runs that week with
-the SAME ratings the live board used — so any week with a committed file is
-graded without look-ahead bias.
+Bonus: a file committed BEFORE a week is played is an as-of-that-week
+rating snapshot, so the History tab can backtest that week without the
+look-ahead bias that current ratings introduce.
 
 Accepted formats:
-  * Massey's own Export file (header row containing 'Pwr'; the power VALUE is
-    the column right after the 'Pwr' rank column)
-  * a plain Team,Rating CSV
-
-Ratings must be point-spread-equivalent (a 3-point gap = a 3-point spread).
-The pipeline re-centres every source on the league mean, so absolute scale
-doesn't matter — only the gaps between teams.
+  * Massey's own Export CSV (header row containing 'Pwr'; the power VALUE
+    sits in the column immediately after the 'Pwr' rank column)
+  * a simple two-column Team,Rating CSV
 """
 from __future__ import annotations
 import csv
 import io
-
-import requests
+import os
 
 from .teams import resolve
 
@@ -33,7 +26,7 @@ DIR = "ratings"
 
 
 def path_for(season: int, week: int) -> str:
-    return f"{DIR}/{season}_wk{int(week):02d}.csv"
+    return os.path.join(DIR, f"massey_{season}_wk{int(week):02d}.csv")
 
 
 def parse_csv(text: str) -> dict[str, float]:
@@ -64,18 +57,28 @@ def parse_csv(text: str) -> dict[str, float]:
     return out
 
 
-def load_from_repo(repo: str, season: int, week: int, branch: str = "main",
-                   timeout: int = 15) -> dict[str, float] | None:
-    """Fetch ratings/<season>_wk<NN>.csv from the public repo, or None."""
-    if not repo:
+def load(season: int, week: int) -> dict[str, float] | None:
+    """Return ratings for this week if a file is committed, else None."""
+    p = path_for(season, week)
+    if not os.path.exists(p):
         return None
-    url = (f"https://raw.githubusercontent.com/{repo}/{branch}/"
-           f"{path_for(season, week)}")
     try:
-        r = requests.get(url, timeout=timeout)
-        if r.status_code != 200:
-            return None
-        parsed = parse_csv(r.text)
-        return parsed or None
+        with open(p, encoding="utf-8-sig") as fh:
+            r = parse_csv(fh.read())
+        return r or None
     except Exception:
         return None
+
+
+def available(season: int) -> list[int]:
+    """Weeks that have a committed ratings file."""
+    if not os.path.isdir(DIR):
+        return []
+    out = []
+    for name in os.listdir(DIR):
+        if name.startswith(f"massey_{season}_wk") and name.endswith(".csv"):
+            try:
+                out.append(int(name.split("_wk")[1][:-4]))
+            except ValueError:
+                continue
+    return sorted(out)
