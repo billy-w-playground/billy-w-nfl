@@ -151,3 +151,33 @@ def list_saved(repo: str, token: str, season: int | None = None,
         d.raise_for_status()
         out.append((wk, d.text))
     return sorted(out)
+
+
+def save_ratings(repo: str, token: str, season: int, week: int,
+                 ratings: dict[str, float], timeout: int = 20) -> str:
+    """Archive the ratings a week was priced with, as ratings/<s>_wk<NN>.csv.
+
+    Written on the FIRST board save of the week and never overwritten, so
+    every slate that week prices off the same numbers and the History tab
+    re-grades the week with the ratings the model actually had — no
+    look-ahead. Returns 'created' | 'exists' | 'skipped'.
+    """
+    from .teams import TEAMS
+    if not ratings:
+        return "skipped"
+    path = f"ratings/{season}_wk{int(week):02d}.csv"
+    sha, _ = get_existing(repo, token, path, timeout)
+    if sha:
+        return "exists"
+    lines = ["Team,Rating"]
+    for abbr, val in sorted(ratings.items(), key=lambda kv: -kv[1]):
+        name = TEAMS.get(abbr, {}).get("full_name", abbr)
+        lines.append(f"{name},{round(float(val), 4)}")
+    payload = {
+        "message": f"Ratings snapshot {season} wk{week}",
+        "content": base64.b64encode(("\n".join(lines) + "\n").encode()).decode(),
+    }
+    r = requests.put(f"{API}/repos/{repo}/contents/{path}",
+                     headers=_headers(token), json=payload, timeout=timeout)
+    r.raise_for_status()
+    return "created"
