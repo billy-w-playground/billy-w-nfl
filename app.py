@@ -47,6 +47,37 @@ button[data-baseweb="tab"][aria-selected="true"] { color: #ffbf00; }
 st.markdown(BOARD_CSS, unsafe_allow_html=True)
 
 
+@st.cache_data(ttl=3600)
+def default_week(season: int) -> int:
+    """Current NFL week from ESPN, so saves land under the right number."""
+    try:
+        import requests as _rq
+        r = _rq.get(
+            "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+            timeout=10)
+        r.raise_for_status()
+        wk = int(r.json().get("week", {}).get("number", 1))
+        return min(max(wk, 1), 18)
+    except Exception:
+        return 1
+
+
+def parse_adjustments(text: str) -> dict:
+    """'SEA:-7, NE:-2.5' -> {'SEA': -7.0, 'NE': -2.5}"""
+    out = {}
+    for chunk in (text or "").replace(";", ",").split(","):
+        if ":" not in chunk:
+            continue
+        team, _, val = chunk.partition(":")
+        from walters.teams import resolve as _res
+        abbr = _res(team.strip())
+        try:
+            out[abbr] = float(val)
+        except (TypeError, ValueError):
+            continue
+    return {k: v for k, v in out.items() if k}
+
+
 def board_table(df, team_cols=(), signal_cols=(), dim_cols=()):
     """Render a dataframe as a Vegas-board HTML table."""
     import html as _html
@@ -83,11 +114,28 @@ with st.sidebar:
     today = dt.date.today()
     default_season = today.year if today.month >= 8 else today.year - 1
     season = st.number_input("Season", 2020, 2035, default_season)
-    week = st.number_input("Week", 1, 18, 1)
-    hfa = st.slider("Home field advantage (pts)", 0.0, 4.0, 1.9, 0.1)
-    scale = st.radio("Factor weighting",
-                     ["Book spec (units ÷ 5)", "Legacy raw (spreadsheet)"])
-    factor_scale = BOOK_FACTOR_SCALE if scale.startswith("Book") else 1.0
+    week = st.number_input("Week", 1, 18, default_week(int(season)),
+                           help="Auto-detected from the schedule; override "
+                                "if you want a different week.")
+    hfa = st.slider(
+        "Home field advantage (pts)", 0.0, 4.0, 1.0, 0.1,
+        help="Commonly assumed to be 3. Measured 1974-2022 it is nearer 2.5, "
+             "and in the four seasons before Walters' book it was under 1 "
+             "point. Default 1.0 reflects the recent trend.")
+    # Book spec only: the chapter is explicit that each factor unit is worth
+    # one-fifth of a point. The old raw weighting was a spreadsheet bug.
+    factor_scale = BOOK_FACTOR_SCALE
+
+    st.divider()
+    st.header("Injury adjustments")
+    inj_text = st.text_input(
+        "Points off, by team", "",
+        placeholder="SEA:-7, NE:-2.5",
+        help="Applied to that team's power rating. Walters' guide: a QB is "
+             "worth about a touchdown (the best more), top non-QBs 2.5-3, "
+             "and ~60% of players roughly zero. Not automated: ESPN's feed "
+             "doesn't say who is a starter, and Questionable players usually "
+             "play — so this stays your judgement call.")
 
     st.divider()
     st.header("Super Bowl carryover")
@@ -128,6 +176,8 @@ if not run:
     _d = st.session_state["run_data"]
     results = _d["results"]
     sonny_r = _d["sonny_r"]
+    ratings_used = _d.get("ratings_used")
+    had_file = _d.get("had_file", False)
     season, week = _d["season"], _d["week"]
     hfa, factor_scale = _d["hfa"], _d["factor_scale"]
     sb_winner, sb_loser = _d["sb_winner"], _d["sb_loser"]
@@ -170,6 +220,16 @@ else:
             warnings.append("Injury fetch returned nothing — reports unavailable.")
     prog.progress(60, "Schedule, weather, scoring…")
 
+    adjustments = parse_adjustments(inj_text)
+    if adjustments:
+        for _src in (file_r, sonny_r):
+            if _src:
+                for _abbr, _delta in adjustments.items():
+                    if _abbr in _src:
+                        _src[_abbr] = _src[_abbr] + _delta
+        st.info("Injury adjustments applied: " +
+                ", ".join(f"{k} {v:+g}" for k, v in adjustments.items()))
+
     if not sonny_r and not file_r:
         for w in warnings:
             st.warning(w)
@@ -204,8 +264,12 @@ else:
         st.info("No games found for that season/week.")
         st.stop()
 
+    ratings_used = file_r or sonny_r
+    had_file = bool(file_r)
     st.session_state["run_data"] = dict(
-        results=results, sonny_r=sonny_r, season=int(season), week=int(week),
+        results=results, sonny_r=sonny_r,
+        ratings_used=(file_r or sonny_r), had_file=bool(file_r),
+        season=int(season), week=int(week),
         hfa=hfa, factor_scale=factor_scale,
         sb_winner=sb_winner, sb_loser=sb_loser)
 
@@ -327,9 +391,22 @@ with tab_w:
                         added, skipped = snap.save_incremental(
                             gh_repo, gh_token, int(season), int(week),
                             sel[cols].to_dict("records"), cols)
+                        msg = (f"Saved {added} game(s) to "
+                               f"{snap.path_for(int(season), int(week))}.")
+                        if added and not had_file and ratings_used:
+                            try:
+                                st_r = snap.save_ratings(
+                                    gh_repo, gh_token, int(season),
+                                    int(week), ratings_used)
+                                if st_r == "created":
+                                    msg += (" Ratings archived to "
+                                            f"ratings/{int(season)}_"
+                                            f"wk{int(week):02d}.csv.")
+                            except Exception as e:
+                                st.warning(f"Board saved, but ratings archive "
+                                           f"failed: {e}")
                         if added:
-                            st.success(f"Saved {added} game(s) to "
-                                       f"{snap.path_for(int(season), int(week))}.")
+                            st.success(msg)
                         else:
                             st.info("Nothing new to save.")
                     except Exception as e:
