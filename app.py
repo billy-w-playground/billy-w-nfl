@@ -367,6 +367,23 @@ with tab_w:
         st.download_button("⬇ Download CSV", df.to_csv(index=False).encode(),
                            file_name=f"walters_{season}_wk{week}.csv",
                            mime="text/csv", use_container_width=True)
+    save_pw = st.secrets.get("save_password", "")
+    if save_pw and not st.session_state.get("save_unlocked"):
+        with sc1:
+            entered = st.text_input("Password to save", type="password",
+                                    key="save_pw_input",
+                                    help="Set in the app's Streamlit Secrets "
+                                         "as save_password. Viewing and "
+                                         "running stay open to everyone; only "
+                                         "writing to the repo is gated.")
+            if entered:
+                if entered == save_pw:
+                    st.session_state["save_unlocked"] = True
+                    st.rerun()
+                else:
+                    st.error("Wrong password.")
+        gh_token = ""   # keeps the save UI hidden until unlocked
+
     with sc1:
         if gh_token and gh_repo:
             unsaved = df[df["Saved"] == ""]
