@@ -22,19 +22,12 @@ import requests
 SUMMARY = ("https://site.api.espn.com/apis/site/v2/sports/football/nfl/"
            "summary?event={eid}")
 HEADERS = {
-    # A bare custom User-Agent gets 403'd on some ESPN endpoints (the
-    # summary/boxscore route in particular) while the scoreboard route
-    # allows it. Send a full browser fingerprint instead.
+    # Keep this minimal. A parenthesised custom UA gets 403'd, and a full
+    # browser CORS fingerprint (Origin/Sec-Fetch-*) gets 403'd too. A plain
+    # standard User-Agent and nothing else is what passes.
     "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) "
                    "Chrome/152.0.0.0 Safari/537.36"),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Origin": "https://www.espn.com",
-    "Referer": "https://www.espn.com/",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
 }
 
 MIN_TEAM_ATTEMPTS = 12      # ignore run-heavy blowouts / weather games
