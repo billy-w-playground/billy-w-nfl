@@ -11,6 +11,13 @@ import requests
 from ..teams import resolve
 
 BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard"
+HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/152.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.espn.com/",
+}
 
 
 def fetch_week(season: int, week: int, seasontype: int = 2, timeout: int = 20) -> list[dict]:
@@ -21,7 +28,8 @@ def fetch_week(season: int, week: int, seasontype: int = 2, timeout: int = 20) -
     market_home_spread (None if no odds), over_under.
     """
     params = {"dates": season, "seasontype": seasontype, "week": week}
-    r = requests.get(BASE, params=params, timeout=timeout)
+    r = requests.get(BASE, params=params, headers=HEADERS,
+                     timeout=timeout)
     r.raise_for_status()
     data = r.json()
     games = []
