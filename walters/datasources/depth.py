@@ -24,7 +24,13 @@ from ..teams import resolve
 TEAMS_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams"
 DEPTH_URL = ("https://site.api.espn.com/apis/site/v2/sports/football/nfl/"
              "teams/{id}/depthcharts")
-HEADERS = {"User-Agent": "Mozilla/5.0 (walters-model)"}
+HEADERS = {
+    # Keep this minimal: a parenthesised custom UA is rejected, and so is a
+    # full browser CORS fingerprint. A plain standard User-Agent passes.
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/152.0.0.0 Safari/537.36"),
+}
 
 
 def norm_name(name: str) -> str:
