@@ -109,15 +109,19 @@ def overall(graded: list[dict]) -> dict:
                 breakeven=52.4)
 
 
-def grade_snapshots(season: int, saved: list[tuple[int, str]]) -> list[dict]:
+def grade_snapshots(season: int, saved: list[tuple[int, str]],
+                    depth_charts: dict | None = None,
+                    flag_games: bool = True) -> list[dict]:
     """Grade saved pre-kickoff boards against actual results. No look-ahead:
     the picks are exactly what the model produced at save time."""
     import csv as _csv
     import io as _io
 
     from .datasources import espn
+    from .datasources import postgame
 
     graded: list[dict] = []
+    flag_cache: dict[str, dict] = {}
     for wk, text in saved:
         try:
             games = {(g["away"], g["home"]): g
@@ -143,9 +147,18 @@ def grade_snapshots(season: int, saved: list[tuple[int, str]]) -> list[dict]:
                              g["home_score"], g["away_score"])
             if res is None:
                 continue
+            eid = str(g.get("event_id") or "")
+            flag = {"clean": None, "reason": "", "detail": ""}
+            if flag_games and eid:
+                if eid not in flag_cache:
+                    flag_cache[eid] = postgame.flag_game(eid, depth_charts)
+                flag = flag_cache[eid]
             graded.append(dict(
                 week=wk, away=away, home=home, bet=bet, edge=edge,
                 walters=row.get("Walters (Home)"), market=market,
                 score=f"{g['away_score']}-{g['home_score']}", result=res,
+                clean=("✓" if flag["clean"] is True
+                       else ("⚠" if flag["clean"] is False else "?")),
+                note=flag["detail"],
             ))
     return graded
