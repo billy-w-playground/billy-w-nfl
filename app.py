@@ -10,7 +10,8 @@ import streamlit as st
 
 from walters.pipeline import run_week
 from walters.scoring import BOOK_FACTOR_SCALE
-from walters.datasources import sonnymoore, odds as odds_api, injuries as inj_api
+from walters.datasources import (sonnymoore, odds as odds_api,
+                                 injuries as inj_api, depth as depth_api)
 from walters import history as hist
 from walters import snapshots as snap
 from walters import ratings as ratings_files
@@ -45,6 +46,15 @@ button[data-baseweb="tab"][aria-selected="true"] { color: #ffbf00; }
 </style>
 """
 st.markdown(BOARD_CSS, unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_depth_charts() -> dict:
+    """All 32 depth charts, cached — 33 requests, so not every rerun."""
+    try:
+        return depth_api.fetch_all()
+    except Exception:
+        return {}
 
 
 @st.cache_data(ttl=3600)
@@ -220,6 +230,11 @@ else:
             warnings.append("Injury fetch returned nothing — reports unavailable.")
     prog.progress(60, "Schedule, weather, scoring…")
 
+    # Archive the UNADJUSTED ratings: injury points are a per-run overlay,
+    # not part of a team's rating. Baking them in would double-count the
+    # moment the week is re-run or re-graded.
+    raw_ratings = dict(file_r or sonny_r or {})
+
     adjustments = parse_adjustments(inj_text)
     if adjustments:
         for _src in (file_r, sonny_r):
@@ -264,7 +279,7 @@ else:
         st.info("No games found for that season/week.")
         st.stop()
 
-    ratings_used = file_r or sonny_r
+    ratings_used = raw_ratings
     had_file = bool(file_r)
     st.session_state["run_data"] = dict(
         results=results, sonny_r=sonny_r,
@@ -357,6 +372,49 @@ with tab_w:
                         for p in plist))
 
     st.divider()
+    with st.expander("🚑 Injury suggestions (depth-chart aware)"):
+        st.caption("Only starters score. Suggested values follow Walters' "
+                   "guide — QB about a touchdown, top non-QBs 2-3, everyone "
+                   "else zero. Review, then paste into the sidebar box.")
+        charts = load_depth_charts()
+        if not charts:
+            st.info("Depth charts unavailable this run.")
+        else:
+            teams_playing = sorted({r["home"] for r in results} |
+                                   {r["away"] for r in results})
+            parts, rows = [], []
+            for tm in teams_playing:
+                inj_list = []
+                for r in results:
+                    if r["home"] == tm:
+                        inj_list = r["injuries_home"]
+                    elif r["away"] == tm:
+                        inj_list = r["injuries_away"]
+                    if inj_list:
+                        break
+                if not inj_list:
+                    continue
+                pts, detail = depth_api.suggest(inj_list, charts.get(tm, {}))
+                for d in detail:
+                    if d["points"] or d["depth"] == "starter":
+                        rows.append(dict(Team=tm, Player=d["name"],
+                                         Pos=d["pos"], Depth=d["depth"],
+                                         Status=d["status"], Pts=-d["points"]))
+                if pts:
+                    parts.append(f"{tm}:-{pts:g}")
+            if rows:
+                board_table(pd.DataFrame(rows), team_cols=("Team",),
+                            dim_cols=("Depth", "Status"))
+            else:
+                st.write("No starters listed on either injury report.")
+            if parts:
+                st.markdown("**Copy into the sidebar box:**")
+                st.code(", ".join(parts), language=None)
+                st.caption("Adjust or delete before applying — the app can't "
+                           "know a backup is unusually good, and Questionable "
+                           "players usually play.")
+
+    st.divider()
     st.markdown("##### Save this week's board")
     st.caption("A board saved before kickoff is the only bias-free record of "
                "what the model predicted.")
@@ -445,17 +503,40 @@ with tab_hist:
             st.warning(f"Could not read saved boards: {e}")
 
     if saved:
-        graded_s = hist.grade_snapshots(int(season), saved)
+        graded_s = hist.grade_snapshots(int(season), saved, load_depth_charts())
         st.success(f"Grading {len(saved)} saved board(s) — no look-ahead bias.")
         if graded_s:
             o = hist.overall(graded_s)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Record", f"{o['W']}-{o['L']}" + (f"-{o['P']}" if o['P'] else ""))
+            c1.metric("Record (all games)",
+                      f"{o['W']}-{o['L']}" + (f"-{o['P']}" if o['P'] else ""))
             c2.metric("Win %", f"{o['win_pct']}%" if o['win_pct'] is not None else "—")
             c3.metric("Units (-110)", f"{o['units']:+.2f}")
             c4.metric("Breakeven", f"{o['breakeven']}%")
-            st.subheader("Win % by edge size (saved boards)")
-            bs = pd.DataFrame(hist.bucket_stats(graded_s))
+
+            flagged = [g for g in graded_s if g.get("clean") == "⚠"]
+            if flagged:
+                clean_only = [g for g in graded_s if g.get("clean") != "⚠"]
+                oc = hist.overall(clean_only)
+                st.caption(
+                    f"{len(flagged)} game(s) flagged for a starting QB not "
+                    "finishing — the modelled team isn't the team that "
+                    "played. Clean-only record shown alongside; the all-games "
+                    "number above stays the headline.")
+                d1, d2, d3 = st.columns(3)
+                d1.metric("Record (clean only)",
+                          f"{oc['W']}-{oc['L']}" + (f"-{oc['P']}" if oc['P'] else ""))
+                d2.metric("Win % (clean)",
+                          f"{oc['win_pct']}%" if oc['win_pct'] is not None else "—")
+                d3.metric("Units (clean)", f"{oc['units']:+.2f}")
+
+            use_clean = st.checkbox("Edge buckets: clean games only", False,
+                                    disabled=not flagged)
+            basis = [g for g in graded_s if g.get("clean") != "⚠"] if use_clean \
+                else graded_s
+            st.subheader("Win % by edge size" +
+                         (" (clean games)" if use_clean else ""))
+            bs = pd.DataFrame(hist.bucket_stats(basis))
             board_table(bs, dim_cols=("bucket",))
             ch = bs.dropna(subset=["win_pct"]).set_index("bucket")
             if len(ch):
@@ -463,7 +544,8 @@ with tab_hist:
             st.subheader("Graded picks")
             board_table(pd.DataFrame(graded_s),
                         team_cols=("away", "home", "bet"),
-                        signal_cols=("result",), dim_cols=("week", "score"))
+                        signal_cols=("result",),
+                        dim_cols=("week", "score", "clean", "note"))
         else:
             st.info("Saved boards found, but none of those games have "
                     "finished yet.")
