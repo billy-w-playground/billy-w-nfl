@@ -58,6 +58,7 @@ def fetch_week(season: int, week: int, seasontype: int = 2, timeout: int = 20) -
         status = comp.get("status", {}).get("type", {})
         venue_name = (comp.get("venue", {}) or {}).get("fullName", "")
         games.append(dict(
+            event_id=str(ev.get("id", "")),
             week=week,
             home=h, away=a,
             date_utc=date_utc.isoformat(),
