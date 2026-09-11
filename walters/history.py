@@ -110,7 +110,7 @@ def overall(graded: list[dict]) -> dict:
 
 
 def grade_snapshots(season: int, saved: list[tuple[int, str]],
-                    depth_charts: dict | None = None,
+                    qb_data: dict | None = None,
                     flag_games: bool = True) -> list[dict]:
     """Grade saved pre-kickoff boards against actual results. No look-ahead:
     the picks are exactly what the model produced at save time."""
@@ -121,7 +121,7 @@ def grade_snapshots(season: int, saved: list[tuple[int, str]],
     from .datasources import postgame
 
     graded: list[dict] = []
-    flag_cache: dict[str, dict] = {}
+    flag_cache: dict = {}
     for wk, text in saved:
         try:
             games = {(g["away"], g["home"]): g
@@ -147,12 +147,13 @@ def grade_snapshots(season: int, saved: list[tuple[int, str]],
                              g["home_score"], g["away_score"])
             if res is None:
                 continue
-            eid = str(g.get("event_id") or "")
             flag = {"clean": None, "reason": "", "detail": ""}
-            if flag_games and eid:
-                if eid not in flag_cache:
-                    flag_cache[eid] = postgame.flag_game(eid, depth_charts)
-                flag = flag_cache[eid]
+            if flag_games:
+                ck = (wk, away, home)
+                if ck not in flag_cache:
+                    flag_cache[ck] = postgame.flag_game(season, wk, away,
+                                                        home, qb_data)
+                flag = flag_cache[ck]
             graded.append(dict(
                 week=wk, away=away, home=home, bet=bet, edge=edge,
                 walters=row.get("Walters (Home)"), market=market,
