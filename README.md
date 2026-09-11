@@ -8,6 +8,9 @@ Hit **Run model** and get Walters lines vs the market for every game that week.
 |---|---|---|---|
 | ESPN scoreboard (unofficial JSON) | Schedule, results, day/time, embedded lines | No | Low — stable for years, but unofficial |
 | Open-Meteo | Kickoff temp/rain at stadium lat/lon | No | Low. Forecasts only ~16 days out |
+| ESPN odds (same scoreboard call) | OPENING spread and total, alongside current — DraftKings | No | Low |
+| scoresandodds.com | Public bets% and money% for spread and total (Action Network data) | No | Medium — server-rendered HTML scrape |
+| Weekly ratings file | `ratings/<season>_wk<NN>.csv` committed to the repo — used for that week instead of Sonny Moore (no toggle — presence of the file is the choice) | No | None — it's your file |
 | Sonny Moore | Power ratings (spread-equivalent) | No | Medium — HTML scrape of a hand-maintained page; may serve last season's final ratings until after Week 1 |
 | The Odds API | Consensus market lines | Optional (free tier 500/mo) | Low |
 
@@ -26,7 +29,10 @@ Hit **Run model** and get Walters lines vs the market for every game that week.
    + scaled factors. Walters home line = −margin. Edge = market − Walters.
 
 ## Tabs
+- **Best Bets** — the homepage. Two independent screens with adjustable thresholds: Walters (edge ≥ N points vs the market) and Formula (a side holding under X% of the money while running a ≥ Y-point money-minus-bets differential), for both spreads and totals. Line movement from the true opener is shown per side, and an RLM ✓ marks movement toward that side. A final section lists sides both screens agree on.
 - **Walters Board** — model lines vs market, edges ranked, Top Plays, explicit bet strings, QB-injury flag (🚑), international flag (🌍), high-confidence filter, per-game factor and injury detail, weekly CSV download.
+- **Injuries**: flagged, never auto-valued (ESPN gives no depth chart); enter points per team in the sidebar.
+- **Home field**: defaults to 1.0 — measured HFA has fallen well below the traditional 3.
 - **Saving**: boards are merged into one file per week, one row per game, first snapshot per game wins — so each slate (Thu / Sun / Mon) can be saved before its own kickoff without a later rerun overwriting earlier picks.
 - **History & Edge Analysis** — re-runs completed weeks, grades every pick against ESPN's closing number, and reports win% by edge bucket: does a bigger edge actually win more? Includes record, units at -110, and the 52.4% breakeven line.
 
