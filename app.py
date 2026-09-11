@@ -341,9 +341,10 @@ with tab_w:
     df = df.sort_values("_absedge", ascending=False,
                         na_position="last").drop(columns="_absedge")
     fc1, fc2 = st.columns(2)
-    hide_qb = fc1.checkbox("High-confidence only (hide QB-injury games)", False)
-    hide_saved = fc2.checkbox("Hide games already saved", False,
-                              disabled=not already)
+    hide_qb = fc1.checkbox("High-confidence only (hide QB-injury games)",
+                           value=False, key="hide_qb_games")
+    hide_saved = fc2.checkbox("Hide games already saved", value=False,
+                              key="hide_saved_games", disabled=not already)
     view = df
     if hide_qb:
         view = view[~view["Flags"].str.contains("QB")]
@@ -541,17 +542,23 @@ with tab_hist:
                           f"{oc['win_pct']}%" if oc['win_pct'] is not None else "—")
                 d3.metric("Units (clean)", f"{oc['units']:+.2f}")
 
-            use_clean = st.checkbox("Edge buckets: clean games only", False,
+            # Stable key + a constant element tree: st.tabs remounts (and
+            # snaps back to tab 1) when the widget tree changes shape, which
+            # is why an unkeyed toggle bounced you out on its first click.
+            use_clean = st.checkbox("Edge buckets: clean games only",
+                                    value=False, key="edge_clean_only",
                                     disabled=not flagged)
             basis = [g for g in graded_s if g.get("clean") != "⚠"] if use_clean \
                 else graded_s
-            st.subheader("Win % by edge size" +
-                         (" (clean games)" if use_clean else ""))
+            st.subheader("Win % by edge size"
+                         + (" (clean games)" if use_clean else ""))
             bs = pd.DataFrame(hist.bucket_stats(basis))
             board_table(bs, dim_cols=("bucket",))
             ch = bs.dropna(subset=["win_pct"]).set_index("bucket")
-            if len(ch):
-                st.bar_chart(ch["win_pct"])
+            # Always render the chart element, even with nothing in it, so the
+            # element count never changes between toggle states.
+            st.bar_chart(ch["win_pct"] if len(ch)
+                         else pd.Series(dtype="float64", name="win_pct"))
             st.subheader("Graded picks")
             board_table(pd.DataFrame(graded_s),
                         team_cols=("away", "home", "bet"),
