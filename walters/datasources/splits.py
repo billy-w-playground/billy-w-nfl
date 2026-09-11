@@ -127,19 +127,23 @@ def fetch(season: int | None = None, week: int | None = None,
 # --- the Formula ------------------------------------------------------------
 def formula_signal(bets_pct: float | None, money_pct: float | None,
                    max_money: float = 40.0, min_diff: float = 5.0,
+                   max_bets: float = 30.0,
                    line_move: float | None = None) -> dict | None:
-    """A side qualifies when money% is BELOW max_money and money% minus
-    bets% is at least min_diff — a small share of the handle, but a bigger
-    share than its ticket count, i.e. fewer and larger bets.
+    """A side qualifies on three conditions:
+
+      * bets%  < max_bets   — the public isn't on it (ticket minority)
+      * money% < max_money  — it still holds a minority of the handle
+      * money% - bets% >= min_diff — but more money than tickets, i.e.
+        fewer and larger wagers
 
     line_move (points moved toward this side, from ESPN's opener) is
-    reported when available but does not gate the signal.
+    reported for context and NEVER gates the signal: the method allows the
+    line to move against the side or stay flat.
     """
     if bets_pct is None or money_pct is None:
         return None
     diff = money_pct - bets_pct
-    if money_pct < max_money and diff >= min_diff:
+    if bets_pct < max_bets and money_pct < max_money and diff >= min_diff:
         return dict(bets_pct=bets_pct, money_pct=money_pct,
-                    differential=round(diff, 1), line_move=line_move,
-                    rlm=bool(line_move is not None and line_move > 0))
+                    differential=round(diff, 1), line_move=line_move)
     return None
