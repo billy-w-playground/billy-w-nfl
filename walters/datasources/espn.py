@@ -43,7 +43,26 @@ def fetch_week(season: int, week: int, seasontype: int = 2, timeout: int = 20) -
 
         odds = None
         ou = None
+        open_spread = None
+        open_total = None
         for o in comp.get("odds", []):
+            # Openers ride in the same payload we already fetch: DraftKings'
+            # pointSpread.home.open.line and total.over.open.line. "close" is
+            # a misnomer for unplayed games — it means current.
+            ps = (o.get("pointSpread") or {}).get("home") or {}
+            if open_spread is None:
+                try:
+                    open_spread = float(str((ps.get("open") or {})
+                                            .get("line", "")).replace("+", ""))
+                except (TypeError, ValueError):
+                    pass
+            tot = (o.get("total") or {}).get("over") or {}
+            if open_total is None:
+                try:
+                    open_total = float(str((tot.get("open") or {})
+                                           .get("line", "")).lstrip("ou"))
+                except (TypeError, ValueError):
+                    pass
             # spread is quoted for the favorite; homeTeamOdds tells side
             spread = o.get("spread")
             ou = o.get("overUnder", ou)
@@ -73,6 +92,8 @@ def fetch_week(season: int, week: int, seasontype: int = 2, timeout: int = 20) -
             away_score=int(away.get("score") or 0),
             market_home_spread=odds,
             over_under=ou,
+            open_home_spread=open_spread,
+            open_total=open_total,
         ))
     return games
 
