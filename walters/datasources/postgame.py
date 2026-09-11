@@ -30,12 +30,22 @@ BASE = "https://github.com/nflverse/nflverse-data/releases/download"
 STATS_URL = BASE + "/stats_player/stats_player_week_{season}.csv"
 DEPTH_URL = BASE + "/depth_charts/depth_charts_{season}.csv"
 
+# nflverse team codes differ from ours for a few franchises. Without this
+# the lookup silently misses and those teams read "no passing stats" forever.
+CODE_FIX = {"LA": "LAR", "WAS": "WSH", "JAC": "JAX", "OAK": "LV",
+            "SD": "LAC", "STL": "LAR"}
+
 MIN_TEAM_ATTEMPTS = 12   # ignore run-heavy / weather games
 QB1_SHARE = 0.50         # QB1 below this share of team attempts = did not finish
 
 
 def norm_name(name: str) -> str:
     return re.sub(r"[^a-z]", "", (name or "").lower())
+
+
+def norm_team(code: str) -> str:
+    c = (code or "").upper()
+    return CODE_FIX.get(c, c)
 
 
 def fetch_qb_attempts(season: int, timeout: int = 60
@@ -55,7 +65,7 @@ def fetch_qb_attempts(season: int, timeout: int = 60
             wk = int(row["week"])
         except (KeyError, ValueError):
             continue
-        key = (wk, (row.get("team") or "").upper())
+        key = (wk, norm_team(row.get("team")))
         out.setdefault(key, []).append(
             (row.get("player_display_name") or row.get("player_name") or "?", att))
     for k in out:
@@ -79,7 +89,7 @@ def fetch_qb1(season: int, timeout: int = 120) -> dict[str, str]:
         for row in csv.DictReader(lines):
             if row.get("pos_abb") != "QB" or row.get("pos_rank") != "1":
                 continue
-            team = (row.get("team") or "").upper()
+            team = norm_team(row.get("team"))
             dt = row.get("dt") or ""
             if team and (team not in out or dt > out[team][1]):
                 out[team] = (row.get("player_name") or "", dt)
@@ -103,14 +113,15 @@ def flag_game(season: int, week: int, away: str, home: str,
     attempts, qb1s = data.get("attempts") or {}, data.get("qb1") or {}
     reasons, undetermined = [], []
     for team in (away, home):
-        rows = attempts.get((int(week), team.upper()))
+        rows = attempts.get((int(week), norm_team(team)))
         if not rows:
-            undetermined.append(f"{team}: no passing stats")
+            undetermined.append(f"{team}: no passing stats yet "
+                                "(nflverse publishes within ~a day)")
             continue
         total = sum(a for _, a in rows)
         if total < MIN_TEAM_ATTEMPTS:
             continue
-        starter = qb1s.get(team.upper())
+        starter = qb1s.get(norm_team(team))
         if not starter:
             undetermined.append(f"{team}: QB1 unknown")
             continue
