@@ -10,6 +10,7 @@ import streamlit as st
 
 from walters.pipeline import run_week
 from walters.scoring import BOOK_FACTOR_SCALE
+from walters.datasources import splits as splits_api
 from walters.datasources import (sonnymoore, odds as odds_api,
                                  injuries as inj_api, depth as depth_api)
 from walters import history as hist
@@ -46,6 +47,15 @@ button[data-baseweb="tab"][aria-selected="true"] { color: #ffbf00; }
 </style>
 """
 st.markdown(BOARD_CSS, unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_splits(season: int, week: int) -> dict:
+    """Public bets%/money% from scoresandodds (server-rendered HTML)."""
+    try:
+        return splits_api.fetch(season, week)
+    except Exception:
+        return {}
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -298,17 +308,129 @@ else:
         hfa=hfa, factor_scale=factor_scale,
         sb_winner=sb_winner, sb_loser=sb_loser)
 
-tab_w, tab_hist = st.tabs(["🏈 Walters Board", "📊 History & Edge Analysis"])
+def bet_str(r):
+    """'SEA -3.0' — the actual ticket, not a model number."""
+    m = r["market_home_spread"]
+    if not r["bet_side"] or m is None:
+        return ""
+    line = m if r["bet_side"] == r["home"] else -m
+    return f"{r['bet_side']} {line:+.1f}"
+
+
+tab_best, tab_w, tab_hist = st.tabs(
+    ["⭐ Best Bets", "🏈 Walters Board", "📊 History & Edge Analysis"])
+
+# --- Tab 0: Best Bets --------------------------------------------------------
+with tab_best:
+    st.caption("Two independent screens. Walters compares the model to the "
+               "market; Formula reads the public bets/money split and line "
+               "movement. They share no inputs — agreement on a side is the "
+               "strongest read, not a requirement.")
+    f1, f2, f3 = st.columns(3)
+    min_edge = f1.slider("Min Walters edge (pts)", 0.0, 12.0, 3.0, 0.5,
+                         key="bb_min_edge",
+                         help="Thresholds are unproven. The History tab's "
+                              "edge buckets are how you find the real one.")
+    max_money = f2.slider("Max money % on the side", 20.0, 100.0, 40.0, 1.0,
+                          key="bb_max_money")
+    min_diff = f3.slider("Min money − bets differential", 0.0, 30.0, 5.0, 0.5,
+                         key="bb_min_diff")
+
+    splits = load_splits(int(season), int(week))
+    if not splits:
+        st.warning("Splits unavailable — Formula screens are empty this run. "
+                   "Walters picks below are unaffected.")
+
+    # ---- Walters screen
+    w_rows = []
+    for r in results:
+        if r["edge"] is None or abs(r["edge"]) < min_edge or not r["bet_side"]:
+            continue
+        w_rows.append({
+            "Away": r["away"], "Home": r["home"], "Day": r["game_day"],
+            "Bet": bet_str(r), "Edge": round(abs(r["edge"]), 1),
+            "Walters": r["walters_home_line"], "Market": r["market_home_spread"],
+            "Flags": ("🚑" if r["qb_flag"] else ""),
+        })
+    st.subheader(f"🏈 Walters — edge ≥ {min_edge:g}")
+    if w_rows:
+        board_table(pd.DataFrame(sorted(w_rows, key=lambda x: -x["Edge"])),
+                    team_cols=("Away", "Home", "Bet"), signal_cols=("Bet",),
+                    dim_cols=("Day", "Flags"))
+    else:
+        st.info("No games clear that edge.")
+
+    # ---- Formula screens (spreads and totals)
+    def _move(cur, opn):
+        return None if (cur is None or opn is None) else round(cur - opn, 1)
+
+    sp_rows, ou_rows = [], []
+    for r in results:
+        s = splits.get((r["away"], r["home"]))
+        if not s:
+            continue
+        # spread: movement toward a side = opener minus current, per side
+        mv_home = _move(r.get("open_home_spread"), r.get("market_home_spread"))
+        for side, bets, money, mv in (
+            (r["away"], s.get("away_bets_pct"), s.get("away_money_pct"),
+             None if mv_home is None else -mv_home),
+            (r["home"], s.get("home_bets_pct"), s.get("home_money_pct"), mv_home),
+        ):
+            sig = splits_api.formula_signal(bets, money, max_money, min_diff, mv)
+            if sig:
+                sp_rows.append({
+                    "Away": r["away"], "Home": r["home"], "Side": side,
+                    "Bets%": sig["bets_pct"], "Money%": sig["money_pct"],
+                    "Diff": sig["differential"],
+                    "Move": sig["line_move"] if sig["line_move"] is not None else "",
+                    "RLM": "✓" if sig["rlm"] else "",
+                })
+        # totals
+        mv_over = _move(r.get("market_total"), r.get("open_total"))
+        for side, bets, money, mv in (
+            ("Over", s.get("over_bets_pct"), s.get("over_money_pct"), mv_over),
+            ("Under", s.get("under_bets_pct"), s.get("under_money_pct"),
+             None if mv_over is None else -mv_over),
+        ):
+            sig = splits_api.formula_signal(bets, money, max_money, min_diff, mv)
+            if sig:
+                ou_rows.append({
+                    "Away": r["away"], "Home": r["home"], "Side": side,
+                    "Total": s.get("total_line") or r.get("market_total"),
+                    "Bets%": sig["bets_pct"], "Money%": sig["money_pct"],
+                    "Diff": sig["differential"],
+                    "Move": sig["line_move"] if sig["line_move"] is not None else "",
+                    "RLM": "✓" if sig["rlm"] else "",
+                })
+
+    st.subheader(f"📈 Formula — spreads (money < {max_money:g}%, "
+                 f"diff ≥ {min_diff:g})")
+    if sp_rows:
+        board_table(pd.DataFrame(sorted(sp_rows, key=lambda x: -x["Diff"])),
+                    team_cols=("Away", "Home", "Side"), signal_cols=("Side", "RLM"))
+    else:
+        st.info("No spread sides clear those thresholds.")
+
+    st.subheader(f"⬆️⬇️ Formula — totals (money < {max_money:g}%, "
+                 f"diff ≥ {min_diff:g})")
+    if ou_rows:
+        board_table(pd.DataFrame(sorted(ou_rows, key=lambda x: -x["Diff"])),
+                    team_cols=("Away", "Home", "Side"), signal_cols=("Side", "RLM"))
+    else:
+        st.info("No totals sides clear those thresholds.")
+
+    # ---- overlap
+    w_sides = {(x["Away"], x["Home"], x["Bet"].split()[0]) for x in w_rows}
+    both = [x for x in sp_rows
+            if (x["Away"], x["Home"], x["Side"]) in w_sides]
+    if both:
+        st.subheader("🎯 Both screens agree")
+        board_table(pd.DataFrame(both), team_cols=("Away", "Home", "Side"),
+                    signal_cols=("Side", "RLM"))
+
 
 # --- Tab 1: Walters ----------------------------------------------------------
 with tab_w:
-    def bet_str(r):
-        m = r["market_home_spread"]
-        if not r["bet_side"] or m is None:
-            return ""
-        line = m if r["bet_side"] == r["home"] else -m
-        return f"{r['bet_side']} {line:+.1f}"
-
     rows = []
     for r in results:
         flags = []
@@ -322,7 +444,8 @@ with tab_w:
             "Away": r["away"], "Home": r["home"], "Day": r["game_day"],
             "Walters (Home)": r["walters_home_line"],
             "Market (Home)": r["market_home_spread"],
-            "Edge": r["edge"], "Bet": bet_str(r),
+            "Edge": (abs(r["edge"]) if r["edge"] is not None else None),
+            "Bet": bet_str(r),
             "Flags": " ".join(flags),
             "Injuries": r["injury_count"],
         })
@@ -337,9 +460,7 @@ with tab_w:
             already = set()
     df["Saved"] = ["✓" if (a, h) in already else ""
                    for a, h in zip(df["Away"], df["Home"])]
-    df["_absedge"] = df["Edge"].abs()
-    df = df.sort_values("_absedge", ascending=False,
-                        na_position="last").drop(columns="_absedge")
+    df = df.sort_values("Edge", ascending=False, na_position="last")
     fc1, fc2 = st.columns(2)
     hide_qb = fc1.checkbox("High-confidence only (hide QB-injury games)",
                            value=False, key="hide_qb_games")
@@ -356,7 +477,7 @@ with tab_w:
         tcols = st.columns(len(top))
         for tc, (_, tr) in zip(tcols, top.iterrows()):
             tc.metric(f"{tr['Away']} @ {tr['Home']}", tr["Bet"],
-                      f"edge {tr['Edge']:+.1f}")
+                      f"edge {tr['Edge']:.1f}")
     c1, c2, c3 = st.columns(3)
     c1.metric("Games", len(df))
     c2.metric("Edges ≥ 1 pt", int((df["Bet"] != "").sum()))
