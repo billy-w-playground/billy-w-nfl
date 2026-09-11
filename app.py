@@ -48,6 +48,16 @@ button[data-baseweb="tab"][aria-selected="true"] { color: #ffbf00; }
 st.markdown(BOARD_CSS, unsafe_allow_html=True)
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_qb_data(season: int) -> dict:
+    """nflverse QB attempts + depth-chart QB1s, for post-game flagging."""
+    from walters.datasources import postgame
+    try:
+        return postgame.load(season)
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_depth_charts() -> dict:
     """All 32 depth charts, cached — 33 requests, so not every rerun."""
@@ -503,7 +513,8 @@ with tab_hist:
             st.warning(f"Could not read saved boards: {e}")
 
     if saved:
-        graded_s = hist.grade_snapshots(int(season), saved, load_depth_charts())
+        graded_s = hist.grade_snapshots(int(season), saved,
+                                        load_qb_data(int(season)))
         st.success(f"Grading {len(saved)} saved board(s) — no look-ahead bias.")
         if graded_s:
             o = hist.overall(graded_s)
