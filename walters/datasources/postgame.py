@@ -1,157 +1,126 @@
-"""Post-game data-quality flags: was this the team we actually modelled?
+"""Post-game data-quality flags, sourced from nflverse (GitHub releases).
 
-The point is NOT to excuse losses. A pick-six that flips a cover is football
-and stays in the record. What justifies a flag is INPUT INVALIDATION — the
-starting quarterback left early, so the team that played is not the team the
-power ratings priced.
+WHY NOT ESPN: the scoreboard route works from Streamlit Cloud but the
+boxscore/summary routes return 403 there (they answer fine from a browser),
+so QB usage can't be read from ESPN in deployment. nflverse publishes the
+same numbers as CSVs on GitHub releases, which the app can always reach.
 
-Detection is by usage, not by injury report: if a team's leading passer threw
-only a small share of its attempts while another quarterback threw most of
-them, the starter did not finish. That catches an exit on the first drive
-without depending on anyone filing a report.
+WHAT IS FLAGGED: input invalidation, not bad luck. If a team's depth-chart
+QB1 threw a small share of that team's attempts, he did not finish, so the
+team that played is not the team the power ratings priced. A pick-six that
+flips a cover is football and stays in the record.
 
-The flag is symmetric by construction — either team's starter exiting flags
-the game — so it cannot quietly favour the bets you happened to win.
+The flag is symmetric: either team's starter exiting flags the game, so it
+cannot quietly favour the bets that happened to win.
 
-Endpoint: site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=ID
+Sources:
+  stats_player_week_<season>.csv  — per player per week: team, position,
+                                    attempts (tiny file, ~30KB early season)
+  depth_charts_<season>.csv       — timestamped depth charts; streamed and
+                                    filtered to QB1 rows (48MB on the wire,
+                                    ~2s, so cache it)
 """
 from __future__ import annotations
+import csv
+import re
 
 import requests
 
-# Several routes serve the same boxscore. The site.api summary route 403s
-# from Streamlit Cloud even though the scoreboard route on the same host is
-# fine, so try each in turn until one returns parseable JSON. Header variants
-# are tried too: the scoreboard works with requests' DEFAULT headers, so a
-# custom User-Agent is attempted only as a fallback.
-ROUTES = [
-    "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={eid}",
-    "https://cdn.espn.com/core/nfl/boxscore?xhr=1&gameId={eid}",
-    "https://cdn.espn.com/core/nfl/game?xhr=1&gameId={eid}",
-]
-HEADERS = {
-    # Keep this minimal. A parenthesised custom UA gets 403'd, and a full
-    # browser CORS fingerprint (Origin/Sec-Fetch-*) gets 403'd too. A plain
-    # standard User-Agent and nothing else is what passes.
-    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                   "AppleWebKit/537.36 (KHTML, like Gecko) "
-                   "Chrome/152.0.0.0 Safari/537.36"),
-}
+BASE = "https://github.com/nflverse/nflverse-data/releases/download"
+STATS_URL = BASE + "/stats_player/stats_player_week_{season}.csv"
+DEPTH_URL = BASE + "/depth_charts/depth_charts_{season}.csv"
 
-MIN_TEAM_ATTEMPTS = 12      # ignore run-heavy blowouts / weather games
-QB1_SHARE = 0.50            # depth-chart QB1 below this share = did not finish
+MIN_TEAM_ATTEMPTS = 12   # ignore run-heavy / weather games
+QB1_SHARE = 0.50         # QB1 below this share of team attempts = did not finish
 
 
-def _attempts(stat: str) -> int:
-    """'18/29' -> 29."""
-    try:
-        return int(str(stat).split("/")[1])
-    except (IndexError, ValueError, AttributeError):
-        return 0
+def norm_name(name: str) -> str:
+    return re.sub(r"[^a-z]", "", (name or "").lower())
 
 
-def _fetch_boxscore(event_id: str, timeout: int = 20) -> dict:
-    """Return the boxscore dict from whichever route answers first."""
-    errors = []
-    for url in ROUTES:
-        for hdrs in (None, HEADERS):     # defaults first: they work elsewhere
-            try:
-                r = requests.get(url.format(eid=event_id), headers=hdrs,
-                                 timeout=timeout)
-                r.raise_for_status()
-                data = r.json()
-            except Exception as e:
-                errors.append(f"{url.split('/')[2]}:{str(e)[:24]}")
-                continue
-            # cdn routes nest everything under gamepackageJSON
-            box = ((data.get("gamepackageJSON") or {}).get("boxscore")
-                   or data.get("boxscore") or {})
-            if box.get("players"):
-                return box
-            errors.append(f"{url.split('/')[2]}:no players")
-    raise RuntimeError("; ".join(errors[:3]) or "no route returned a boxscore")
-
-
-def qb_usage(event_id: str, timeout: int = 20) -> dict:
-    """{team_abbr: [(player, attempts), ...]} sorted by attempts desc."""
-    box = _fetch_boxscore(event_id, timeout)
-    out: dict[str, list[tuple[str, int]]] = {}
-    for team_block in box.get("players", []):
-        abbr = ((team_block.get("team") or {}).get("abbreviation") or "").upper()
-        if not abbr:
+def fetch_qb_attempts(season: int, timeout: int = 60
+                      ) -> dict[tuple[int, str], list[tuple[str, int]]]:
+    """{(week, team): [(player, attempts), ...]} sorted by attempts desc."""
+    r = requests.get(STATS_URL.format(season=season), timeout=timeout)
+    r.raise_for_status()
+    out: dict[tuple[int, str], list[tuple[str, int]]] = {}
+    for row in csv.DictReader(r.text.splitlines()):
+        try:
+            att = int(float(row.get("attempts") or 0))
+        except ValueError:
+            att = 0
+        if att <= 0:
             continue
-        rows: list[tuple[str, int]] = []
-        for statgroup in team_block.get("statistics", []):
-            if str(statgroup.get("name", "")).lower() != "passing":
-                continue
-            keys = [str(k).upper() for k in (statgroup.get("keys") or [])]
-            try:
-                idx = keys.index("COMPLETIONS/PASSINGATTEMPTS")
-            except ValueError:
-                idx = 0     # ESPN's passing stats lead with C/ATT
-            for ath in statgroup.get("athletes", []):
-                name = (ath.get("athlete") or {}).get("displayName", "?")
-                stats = ath.get("stats") or []
-                att = _attempts(stats[idx]) if idx < len(stats) else 0
-                if att:
-                    rows.append((name, att))
-        if rows:
-            out[abbr] = sorted(rows, key=lambda x: -x[1])
+        try:
+            wk = int(row["week"])
+        except (KeyError, ValueError):
+            continue
+        key = (wk, (row.get("team") or "").upper())
+        out.setdefault(key, []).append(
+            (row.get("player_display_name") or row.get("player_name") or "?", att))
+    for k in out:
+        out[k].sort(key=lambda x: -x[1])
     return out
 
 
-def flag_game(event_id: str, depth_charts: dict | None = None,
-              timeout: int = 20) -> dict:
-    """Return {'clean': bool|None, 'reason': str, 'detail': str}.
+def fetch_qb1(season: int, timeout: int = 120) -> dict[str, str]:
+    """{team: QB1 name} from the most recent depth-chart snapshot.
 
-    Method: find each team's depth-chart QB1 and measure his share of the
-    team's pass attempts. A starter who leaves early has a tiny share even
-    though a BACKUP may lead the game in attempts — which is why the
-    depth chart is required rather than just picking the leading passer.
-
-    A blowout where the starter finishes and a backup mops up is NOT
-    flagged: QB1's share stays high. clean=None means undetermined (no
-    stats yet, or QB1 could not be identified) — never treated as clean.
+    Streamed so the 48MB file is never held in memory. LIMITATION: this is
+    the latest snapshot, so a mid-season change of starter is applied to
+    every week. Fine for current-week flagging; a stricter version would
+    pick the snapshot preceding each game.
     """
-    from .depth import norm_name
+    out: dict[str, tuple[str, str]] = {}
+    with requests.get(DEPTH_URL.format(season=season), stream=True,
+                      timeout=timeout) as r:
+        r.raise_for_status()
+        lines = (ln.decode("utf-8", "replace") for ln in r.iter_lines() if ln)
+        for row in csv.DictReader(lines):
+            if row.get("pos_abb") != "QB" or row.get("pos_rank") != "1":
+                continue
+            team = (row.get("team") or "").upper()
+            dt = row.get("dt") or ""
+            if team and (team not in out or dt > out[team][1]):
+                out[team] = (row.get("player_name") or "", dt)
+    return {t: nm for t, (nm, _) in out.items()}
 
-    try:
-        usage = qb_usage(event_id, timeout)
-    except Exception as e:
-        msg = str(e)
-        if "403" in msg and "no players" not in msg:
-            msg = "all boxscore routes blocked: " + msg
-        return dict(clean=None, reason="unknown", detail=msg[:110])
-    if not usage:
-        return dict(clean=None, reason="unknown", detail="no passing stats")
 
+def load(season: int) -> dict:
+    """Everything needed to flag a season's games. Cache this."""
+    return dict(attempts=fetch_qb_attempts(season), qb1=fetch_qb1(season))
+
+
+def flag_game(season: int, week: int, away: str, home: str,
+              data: dict | None) -> dict:
+    """Return {'clean': True|False|None, 'reason': str, 'detail': str}.
+
+    clean=None means undetermined (stats not published yet, QB1 unknown) and
+    is never treated as clean.
+    """
+    if not data:
+        return dict(clean=None, reason="unknown", detail="no nflverse data")
+    attempts, qb1s = data.get("attempts") or {}, data.get("qb1") or {}
     reasons, undetermined = [], []
-    for abbr, rows in usage.items():
+    for team in (away, home):
+        rows = attempts.get((int(week), team.upper()))
+        if not rows:
+            undetermined.append(f"{team}: no passing stats")
+            continue
         total = sum(a for _, a in rows)
         if total < MIN_TEAM_ATTEMPTS:
             continue
-        chart = (depth_charts or {}).get(abbr) or {}
-        qb1 = next((nm for nm, (pos, rank) in chart.items()
-                    if pos.upper() == "QB" and rank == 1), None)
-        if not qb1:
-            # fall back: two passers each with real volume is suspicious
-            if len(rows) >= 2 and rows[1][1] >= 8:
-                reasons.append(f"{abbr} two QBs used "
-                               f"({rows[0][0]} {rows[0][1]}, "
-                               f"{rows[1][0]} {rows[1][1]})")
-            else:
-                undetermined.append(abbr)
+        starter = qb1s.get(team.upper())
+        if not starter:
+            undetermined.append(f"{team}: QB1 unknown")
             continue
-        qb1_att = next((a for nm, a in rows if norm_name(nm) == qb1), 0)
-        if (qb1_att / total) < QB1_SHARE:
-            starter_label = next((nm for nm, a in rows
-                                  if norm_name(nm) == qb1), "QB1")
-            reasons.append(f"{abbr} starter {starter_label} threw "
-                           f"{qb1_att}/{total}")
+        key = norm_name(starter)
+        att = next((a for nm, a in rows if norm_name(nm) == key), 0)
+        if (att / total) < QB1_SHARE:
+            reasons.append(f"{team} starter {starter} threw {att}/{total}")
     if reasons:
         return dict(clean=False, reason="QB did not finish",
                     detail="; ".join(reasons))
     if undetermined:
-        return dict(clean=None, reason="unknown",
-                    detail="QB1 not identified: " + ", ".join(undetermined))
+        return dict(clean=None, reason="unknown", detail="; ".join(undetermined))
     return dict(clean=True, reason="", detail="")
