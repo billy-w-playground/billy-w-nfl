@@ -325,7 +325,9 @@ with tab_best:
     st.caption("Two independent screens. Walters compares the model to the "
                "market; Formula reads the public bets/money split and line "
                "movement. They share no inputs — agreement on a side is the "
-               "strongest read, not a requirement.")
+               "strongest read, not a requirement. Open and Now are both "
+               "ESPN/DraftKings numbers, so Move is real movement at one "
+               "book. A side whose line moved against it is excluded.")
     f1, f2, f3, f4 = st.columns(4)
     min_edge = f1.slider("Min Walters edge (pts)", 0.0, 12.0, 3.0, 0.5,
                          key="bb_min_edge",
@@ -384,7 +386,10 @@ with tab_best:
         ):
             sig = splits_api.formula_signal(bets, money, max_money, min_diff,
                                             max_bets, mv)
-            if sig:
+            # Reject a line that moved AGAINST the side. Flat (0.0) passes.
+            # Both numbers are ESPN/DraftKings, so the comparison is
+            # same-book; mixing in a consensus "now" made phantom moves.
+            if sig and (mv is None or mv >= 0):
                 sp_rows.append({
                     "Away": r["away"], "Home": r["home"], "Side": side,
                     "Open": opn, "Now": now,
@@ -394,7 +399,9 @@ with tab_best:
                 })
         # totals
         mv_over = _move(r.get("market_total"), r.get("open_total"))
-        now_total = s.get("total_line") or r.get("market_total")
+        # ESPN (DraftKings) for BOTH, so Open->Now is a real move rather
+        # than the gap between two books' numbers.
+        now_total = r.get("market_total")
         open_total = r.get("open_total")
         for side, bets, money, mv in (
             ("Over", s.get("over_bets_pct"), s.get("over_money_pct"), mv_over),
@@ -403,7 +410,7 @@ with tab_best:
         ):
             sig = splits_api.formula_signal(bets, money, max_money, min_diff,
                                             max_bets, mv)
-            if sig:
+            if sig and (mv is None or mv >= 0):
                 ou_rows.append({
                     "Away": r["away"], "Home": r["home"], "Side": side,
                     "Open": open_total, "Now": now_total,
@@ -413,7 +420,8 @@ with tab_best:
                 })
 
     st.subheader(f"📈 Formula — spreads (bets < {max_bets:g}%, "
-                 f"money < {max_money:g}%, diff ≥ {min_diff:g})")
+                 f"money < {max_money:g}%, diff ≥ {min_diff:g}, "
+                 "line not moving against the side)")
     if sp_rows:
         board_table(pd.DataFrame(sorted(sp_rows, key=lambda x: -x["Diff"])),
                     team_cols=("Away", "Home", "Side"), signal_cols=("Side",),
@@ -422,7 +430,8 @@ with tab_best:
         st.info("No spread sides clear those thresholds.")
 
     st.subheader(f"⬆️⬇️ Formula — totals (bets < {max_bets:g}%, "
-                 f"money < {max_money:g}%, diff ≥ {min_diff:g})")
+                 f"money < {max_money:g}%, diff ≥ {min_diff:g}, "
+                 "line not moving against the side)")
     if ou_rows:
         board_table(pd.DataFrame(sorted(ou_rows, key=lambda x: -x["Diff"])),
                     team_cols=("Away", "Home", "Side"), signal_cols=("Side",),
