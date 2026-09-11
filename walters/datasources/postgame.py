@@ -19,8 +19,16 @@ from __future__ import annotations
 
 import requests
 
-SUMMARY = ("https://site.api.espn.com/apis/site/v2/sports/football/nfl/"
-           "summary?event={eid}")
+# Several routes serve the same boxscore. The site.api summary route 403s
+# from Streamlit Cloud even though the scoreboard route on the same host is
+# fine, so try each in turn until one returns parseable JSON. Header variants
+# are tried too: the scoreboard works with requests' DEFAULT headers, so a
+# custom User-Agent is attempted only as a fallback.
+ROUTES = [
+    "https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={eid}",
+    "https://cdn.espn.com/core/nfl/boxscore?xhr=1&gameId={eid}",
+    "https://cdn.espn.com/core/nfl/game?xhr=1&gameId={eid}",
+]
 HEADERS = {
     # Keep this minimal. A parenthesised custom UA gets 403'd, and a full
     # browser CORS fingerprint (Origin/Sec-Fetch-*) gets 403'd too. A plain
@@ -42,14 +50,33 @@ def _attempts(stat: str) -> int:
         return 0
 
 
+def _fetch_boxscore(event_id: str, timeout: int = 20) -> dict:
+    """Return the boxscore dict from whichever route answers first."""
+    errors = []
+    for url in ROUTES:
+        for hdrs in (None, HEADERS):     # defaults first: they work elsewhere
+            try:
+                r = requests.get(url.format(eid=event_id), headers=hdrs,
+                                 timeout=timeout)
+                r.raise_for_status()
+                data = r.json()
+            except Exception as e:
+                errors.append(f"{url.split('/')[2]}:{str(e)[:24]}")
+                continue
+            # cdn routes nest everything under gamepackageJSON
+            box = ((data.get("gamepackageJSON") or {}).get("boxscore")
+                   or data.get("boxscore") or {})
+            if box.get("players"):
+                return box
+            errors.append(f"{url.split('/')[2]}:no players")
+    raise RuntimeError("; ".join(errors[:3]) or "no route returned a boxscore")
+
+
 def qb_usage(event_id: str, timeout: int = 20) -> dict:
     """{team_abbr: [(player, attempts), ...]} sorted by attempts desc."""
-    r = requests.get(SUMMARY.format(eid=event_id), headers=HEADERS,
-                     timeout=timeout)
-    r.raise_for_status()
-    data = r.json()
+    box = _fetch_boxscore(event_id, timeout)
     out: dict[str, list[tuple[str, int]]] = {}
-    for team_block in (data.get("boxscore") or {}).get("players", []):
+    for team_block in box.get("players", []):
         abbr = ((team_block.get("team") or {}).get("abbreviation") or "").upper()
         if not abbr:
             continue
@@ -92,11 +119,9 @@ def flag_game(event_id: str, depth_charts: dict | None = None,
         usage = qb_usage(event_id, timeout)
     except Exception as e:
         msg = str(e)
-        if "403" in msg:
-            msg = "boxscore blocked (403)"
-        elif "404" in msg:
-            msg = "boxscore not published yet"
-        return dict(clean=None, reason="unknown", detail=msg[:60])
+        if "403" in msg and "no players" not in msg:
+            msg = "all boxscore routes blocked: " + msg
+        return dict(clean=None, reason="unknown", detail=msg[:110])
     if not usage:
         return dict(clean=None, reason="unknown", detail="no passing stats")
 
