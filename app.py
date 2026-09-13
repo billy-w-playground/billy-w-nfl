@@ -317,6 +317,42 @@ def bet_str(r):
     return f"{r['bet_side']} {line:+.1f}"
 
 
+# The full board is built once, above the tabs, because both the Best Bets
+# tab (for saving) and the Walters tab (for display) need it.
+_rows = []
+for _r in results:
+    _flags = []
+    if _r["qb_flag"]:
+        _flags.append("🚑 QB")
+    if _r["neutral_site"]:
+        _flags.append("🌍 INTL")
+        if not _r.get("venue_recognized", True):
+            _flags.append("⚠️ VENUE?")
+    _rows.append({
+        "Away": _r["away"], "Home": _r["home"], "Day": _r["game_day"],
+        "Walters (Home)": _r["walters_home_line"],
+        "Market (Home)": _r["market_home_spread"],
+        "Edge": (abs(_r["edge"]) if _r["edge"] is not None else None),
+        "Bet": bet_str(_r),
+        "Flags": " ".join(_flags),
+        "Injuries": _r["injury_count"],
+    })
+df = pd.DataFrame(_rows)
+GH_TOKEN = st.secrets.get("github_token", "")
+GH_REPO = st.secrets.get("github_repo", "")
+SAVE_PW = st.secrets.get("save_password", "")
+already = set()
+saved_f = set()
+if GH_TOKEN and GH_REPO:
+    try:
+        already = snap.saved_games(GH_REPO, GH_TOKEN, int(season), int(week))
+        saved_f = snap.saved_formula(GH_REPO, GH_TOKEN, int(season), int(week))
+    except Exception:
+        pass
+df["Saved"] = ["✓" if (a, h) in already else ""
+               for a, h in zip(df["Away"], df["Home"])]
+df = df.sort_values("Edge", ascending=False, na_position="last")
+
 tab_best, tab_w, tab_hist = st.tabs(
     ["⭐ Best Bets", "🏈 Walters Board", "📊 History & Edge Analysis"])
 
@@ -341,6 +377,18 @@ with tab_best:
     min_diff = f4.slider("Min money − bets differential", 0.0, 30.0, 5.0, 0.5,
                          key="bb_min_diff")
 
+    # A game that has kicked off is not a bet any more. This is separate
+    # from "already saved" — it drops finished games even if never recorded.
+    live = [r for r in results if not r.get("completed_scores")]
+    dropped = len(results) - len(live)
+
+    saved_w = already
+
+    hide_recorded = st.checkbox("Hide picks already saved", value=True,
+                                key="bb_hide_saved")
+    if dropped:
+        st.caption(f"{dropped} game(s) already kicked off and are excluded.")
+
     splits = load_splits(int(season), int(week))
     if not splits:
         st.warning("Splits unavailable — Formula screens are empty this run. "
@@ -348,10 +396,14 @@ with tab_best:
 
     # ---- Walters screen
     w_rows = []
-    for r in results:
+    for r in live:
         if r["edge"] is None or abs(r["edge"]) < min_edge or not r["bet_side"]:
             continue
+        is_saved = (r["away"], r["home"]) in saved_w
+        if is_saved and hide_recorded:
+            continue
         w_rows.append({
+            "Saved": "✓" if is_saved else "",
             "Away": r["away"], "Home": r["home"], "Day": r["game_day"],
             "Bet": bet_str(r), "Edge": round(abs(r["edge"]), 1),
             "Walters": r["walters_home_line"], "Market": r["market_home_spread"],
@@ -361,7 +413,7 @@ with tab_best:
     if w_rows:
         board_table(pd.DataFrame(sorted(w_rows, key=lambda x: -x["Edge"])),
                     team_cols=("Away", "Home", "Bet"), signal_cols=("Bet",),
-                    dim_cols=("Day", "Flags"))
+                    dim_cols=("Saved", "Day", "Flags"))
     else:
         st.info("No games clear that edge.")
 
@@ -370,7 +422,7 @@ with tab_best:
         return None if (cur is None or opn is None) else round(cur - opn, 1)
 
     sp_rows, ou_rows = [], []
-    for r in results:
+    for r in live:
         s = splits.get((r["away"], r["home"]))
         if not s:
             continue
@@ -390,9 +442,14 @@ with tab_best:
             # Both numbers are ESPN/DraftKings, so the comparison is
             # same-book; mixing in a consensus "now" made phantom moves.
             if sig and (mv is None or mv >= 0):
+                is_saved = (r["away"], r["home"], "spread", side) in saved_f
+                if is_saved and hide_recorded:
+                    continue
                 sp_rows.append({
-                    "Away": r["away"], "Home": r["home"], "Side": side,
-                    "Open": opn, "Now": now,
+                    "Saved": "✓" if is_saved else "",
+                    "Away": r["away"], "Home": r["home"],
+                    "Market": "spread", "Side": side,
+                    "HomeSpread": ch, "Open": opn, "Now": now,
                     "Bets%": sig["bets_pct"], "Money%": sig["money_pct"],
                     "Diff": sig["differential"],
                     "Move": sig["line_move"] if sig["line_move"] is not None else "",
@@ -411,9 +468,14 @@ with tab_best:
             sig = splits_api.formula_signal(bets, money, max_money, min_diff,
                                             max_bets, mv)
             if sig and (mv is None or mv >= 0):
+                is_saved = (r["away"], r["home"], "total", side) in saved_f
+                if is_saved and hide_recorded:
+                    continue
                 ou_rows.append({
-                    "Away": r["away"], "Home": r["home"], "Side": side,
-                    "Open": open_total, "Now": now_total,
+                    "Saved": "✓" if is_saved else "",
+                    "Away": r["away"], "Home": r["home"],
+                    "Market": "total", "Side": side,
+                    "Total": now_total, "Open": open_total, "Now": now_total,
                     "Bets%": sig["bets_pct"], "Money%": sig["money_pct"],
                     "Diff": sig["differential"],
                     "Move": sig["line_move"] if sig["line_move"] is not None else "",
@@ -423,9 +485,10 @@ with tab_best:
                  f"money < {max_money:g}%, diff ≥ {min_diff:g}, "
                  "line not moving against the side)")
     if sp_rows:
-        board_table(pd.DataFrame(sorted(sp_rows, key=lambda x: -x["Diff"])),
+        _sp = pd.DataFrame(sorted(sp_rows, key=lambda x: -x["Diff"]))
+        board_table(_sp.drop(columns=["Market", "HomeSpread"]),
                     team_cols=("Away", "Home", "Side"), signal_cols=("Side",),
-                    dim_cols=("Open", "Now"))
+                    dim_cols=("Saved", "Open", "Now"))
     else:
         st.info("No spread sides clear those thresholds.")
 
@@ -433,54 +496,128 @@ with tab_best:
                  f"money < {max_money:g}%, diff ≥ {min_diff:g}, "
                  "line not moving against the side)")
     if ou_rows:
-        board_table(pd.DataFrame(sorted(ou_rows, key=lambda x: -x["Diff"])),
+        _ou = pd.DataFrame(sorted(ou_rows, key=lambda x: -x["Diff"]))
+        board_table(_ou.drop(columns=["Market", "Total"]),
                     team_cols=("Away", "Home", "Side"), signal_cols=("Side",),
-                    dim_cols=("Open", "Now"))
+                    dim_cols=("Saved", "Open", "Now"))
     else:
         st.info("No totals sides clear those thresholds.")
 
     # ---- overlap
-    w_sides = {(x["Away"], x["Home"], x["Bet"].split()[0]) for x in w_rows}
+    w_sides = {(x["Away"], x["Home"], x["Bet"].split()[0]) for x in w_rows}  # noqa
     both = [x for x in sp_rows
             if (x["Away"], x["Home"], x["Side"]) in w_sides]
     if both:
         st.subheader("🎯 Both screens agree")
-        board_table(pd.DataFrame(both), team_cols=("Away", "Home", "Side"),
-                    signal_cols=("Side",), dim_cols=("Open", "Now"))
+        board_table(pd.DataFrame(both).drop(columns=["Market", "HomeSpread"]),
+                    team_cols=("Away", "Home", "Side"), signal_cols=("Side",),
+                    dim_cols=("Saved", "Open", "Now"))
 
+
+    # ---- one save per slate: board + Formula picks together
+    st.divider()
+    st.markdown("##### Save a slate")
+    st.caption("One button per slate. Saves the full Walters board for those "
+               "games AND any qualifying Formula picks, with the numbers as "
+               "they stand now. First save of anything wins, so a later run "
+               "can never rewrite a pre-kickoff record.")
+
+    if not (GH_TOKEN and GH_REPO):
+        st.info("Add `github_token` and `github_repo` in the app's Streamlit "
+                "**Secrets** to enable saving (steps in "
+                "`walters/snapshots.py`).")
+    elif SAVE_PW and not st.session_state.get("save_unlocked"):
+        entered = st.text_input("Password to save", type="password",
+                                key="save_pw_input",
+                                help="Set as save_password in Secrets. "
+                                     "Viewing and running stay open; only "
+                                     "writing to the repo is gated.")
+        if entered:
+            if entered == SAVE_PW:
+                st.session_state["save_unlocked"] = True
+                st.rerun()
+            else:
+                st.error("Wrong password.")
+    else:
+        # only games not yet saved AND not yet kicked off
+        live_keys = {(r["away"], r["home"]) for r in live}
+        board_unsaved = df[(df["Saved"] == "")
+                           & [(a_, h_) in live_keys
+                              for a_, h_ in zip(df["Away"], df["Home"])]]
+        day_of = {(r["away"], r["home"]): r["game_day"] for r in live}
+        f_pending = [x for x in (sp_rows + ou_rows) if not x["Saved"]]
+        days = list(dict.fromkeys(board_unsaved["Day"].tolist()))
+        if not days:
+            st.success("Every game still to come is already saved.")
+        else:
+            counts = {}
+            for d in days:
+                g = int((board_unsaved["Day"] == d).sum())
+                f = sum(1 for x in f_pending
+                        if day_of.get((x["Away"], x["Home"])) == d)
+                counts[d] = (g, f)
+            picks = st.multiselect(
+                "Which slate(s)?", options=days, default=days,
+                key="save_slates",
+                format_func=lambda d: (f"{d} — {counts[d][0]} game"
+                                       f"{'s' if counts[d][0] != 1 else ''}"
+                                       + (f" + {counts[d][1]} Formula"
+                                          if counts[d][1] else "")),
+                help="Save each slate before its kickoff.")
+            sel_board = board_unsaved[board_unsaved["Day"].isin(picks)]
+            sel_formula = [x for x in f_pending
+                           if day_of.get((x["Away"], x["Home"])) in picks]
+            label = (f"💾 Save {len(sel_board)} game(s)"
+                     + (f" + {len(sel_formula)} Formula pick(s)"
+                        if sel_formula else ""))
+            if st.button(label, type="primary", use_container_width=True,
+                         disabled=sel_board.empty and not sel_formula,
+                         key="save_slate_btn"):
+                msgs, errs = [], []
+                try:
+                    cols = [c for c in df.columns if not c.startswith("_")]
+                    added, _ = snap.save_incremental(
+                        GH_REPO, GH_TOKEN, int(season), int(week),
+                        sel_board[cols].to_dict("records"), cols)
+                    if added:
+                        msgs.append(f"{added} game(s) → "
+                                    f"{snap.path_for(int(season), int(week))}")
+                        if not had_file and ratings_used:
+                            try:
+                                if snap.save_ratings(GH_REPO, GH_TOKEN,
+                                                     int(season), int(week),
+                                                     ratings_used) == "created":
+                                    msgs.append(
+                                        "ratings archived → "
+                                        f"ratings/{int(season)}_"
+                                        f"wk{int(week):02d}.csv")
+                            except Exception as e:
+                                errs.append(f"ratings archive: {e}")
+                except Exception as e:
+                    errs.append(f"board: {e}")
+                if sel_formula:
+                    try:
+                        fcols = ["Away", "Home", "Market", "Side",
+                                 "HomeSpread", "Total", "Open", "Now",
+                                 "Bets%", "Money%", "Diff", "Move"]
+                        fadd, _ = snap.save_formula(
+                            GH_REPO, GH_TOKEN, int(season), int(week),
+                            sel_formula, fcols)
+                        if fadd:
+                            msgs.append(
+                                f"{fadd} Formula pick(s) → "
+                                f"{snap.formula_path(int(season), int(week))}")
+                    except Exception as e:
+                        errs.append(f"formula: {e}")
+                for e in errs:
+                    st.error(f"Save failed — {e}")
+                if msgs:
+                    st.success("Saved: " + "; ".join(msgs) + ".")
+                elif not errs:
+                    st.info("Nothing new to save.")
 
 # --- Tab 1: Walters ----------------------------------------------------------
 with tab_w:
-    rows = []
-    for r in results:
-        flags = []
-        if r["qb_flag"]:
-            flags.append("🚑 QB")
-        if r["neutral_site"]:
-            flags.append("🌍 INTL")
-            if not r.get("venue_recognized", True):
-                flags.append("⚠️ VENUE?")
-        rows.append({
-            "Away": r["away"], "Home": r["home"], "Day": r["game_day"],
-            "Walters (Home)": r["walters_home_line"],
-            "Market (Home)": r["market_home_spread"],
-            "Edge": (abs(r["edge"]) if r["edge"] is not None else None),
-            "Bet": bet_str(r),
-            "Flags": " ".join(flags),
-            "Injuries": r["injury_count"],
-        })
-    df = pd.DataFrame(rows)
-    _tok = st.secrets.get("github_token", "")
-    _repo = st.secrets.get("github_repo", "")
-    already = set()
-    if _tok and _repo:
-        try:
-            already = snap.saved_games(_repo, _tok, int(season), int(week))
-        except Exception:
-            already = set()
-    df["Saved"] = ["✓" if (a, h) in already else ""
-                   for a, h in zip(df["Away"], df["Home"])]
-    df = df.sort_values("Edge", ascending=False, na_position="last")
     fc1, fc2 = st.columns(2)
     hide_qb = fc1.checkbox("High-confidence only (hide QB-injury games)",
                            value=False, key="hide_qb_games")
@@ -567,86 +704,16 @@ with tab_w:
                            "players usually play.")
 
     st.divider()
-    st.markdown("##### Save this week's board")
-    st.caption("A board saved before kickoff is the only bias-free record of "
-               "what the model predicted.")
-    gh_token = st.secrets.get("github_token", "")
-    gh_repo = st.secrets.get("github_repo", "")
-    sc1, sc2 = st.columns([2, 1])
-    with sc2:
-        st.download_button("⬇ Download CSV", df.to_csv(index=False).encode(),
-                           file_name=f"walters_{season}_wk{week}.csv",
-                           mime="text/csv", use_container_width=True)
-    save_pw = st.secrets.get("save_password", "")
-    if save_pw and not st.session_state.get("save_unlocked"):
-        with sc1:
-            entered = st.text_input("Password to save", type="password",
-                                    key="save_pw_input",
-                                    help="Set in the app's Streamlit Secrets "
-                                         "as save_password. Viewing and "
-                                         "running stay open to everyone; only "
-                                         "writing to the repo is gated.")
-            if entered:
-                if entered == save_pw:
-                    st.session_state["save_unlocked"] = True
-                    st.rerun()
-                else:
-                    st.error("Wrong password.")
-        gh_token = ""   # keeps the save UI hidden until unlocked
-
-    with sc1:
-        if gh_token and gh_repo:
-            unsaved = df[df["Saved"] == ""]
-            days = list(dict.fromkeys(unsaved["Day"].tolist()))
-            if not days:
-                st.success("Every game this week is already saved.")
-            else:
-                day_counts = {d: int((unsaved["Day"] == d).sum()) for d in days}
-                picks = st.multiselect(
-                    "Which slate(s) to save now?",
-                    options=days, default=days,
-                    format_func=lambda d: f"{d} ({day_counts[d]} game"
-                                          f"{'s' if day_counts[d] != 1 else ''})",
-                    help="Save each slate before its kickoff. Games already "
-                         "saved are never overwritten.")
-                sel = unsaved[unsaved["Day"].isin(picks)]
-                if st.button(f"💾 Save {len(sel)} game(s) to repo",
-                             type="primary", use_container_width=True,
-                             disabled=sel.empty):
-                    try:
-                        cols = [c for c in df.columns if not c.startswith("_")]
-                        added, skipped = snap.save_incremental(
-                            gh_repo, gh_token, int(season), int(week),
-                            sel[cols].to_dict("records"), cols)
-                        msg = (f"Saved {added} game(s) to "
-                               f"{snap.path_for(int(season), int(week))}.")
-                        if added and not had_file and ratings_used:
-                            try:
-                                st_r = snap.save_ratings(
-                                    gh_repo, gh_token, int(season),
-                                    int(week), ratings_used)
-                                if st_r == "created":
-                                    msg += (" Ratings archived to "
-                                            f"ratings/{int(season)}_"
-                                            f"wk{int(week):02d}.csv.")
-                            except Exception as e:
-                                st.warning(f"Board saved, but ratings archive "
-                                           f"failed: {e}")
-                        if added:
-                            st.success(msg)
-                        else:
-                            st.info("Nothing new to save.")
-                    except Exception as e:
-                        st.error(f"Save failed: {e}")
-        else:
-            st.info("Add `github_token` and `github_repo` in the app's "
-                    "Streamlit **Secrets** to enable one-click saving "
-                    "(setup steps are in walters/snapshots.py).")
+    st.download_button("⬇ Download this board (CSV)",
+                       df.to_csv(index=False).encode(),
+                       file_name=f"walters_{season}_wk{week}.csv",
+                       mime="text/csv")
+    st.caption("Saving to the repo lives on the **Best Bets** tab — one "
+               "button per slate, covering both the board and Formula picks.")
 
 # --- Tab 2: History & Edge Analysis -----------------------------------------
 with tab_hist:
-    gh_token = st.secrets.get("github_token", "")
-    gh_repo = st.secrets.get("github_repo", "")
+    gh_token, gh_repo = GH_TOKEN, GH_REPO
     saved = snap.list_saved_local(int(season))
     if not saved and gh_token and gh_repo:
         try:
@@ -754,3 +821,42 @@ with tab_hist:
                 "the model is being graded on. These figures flatter the "
                 "record — use the weekly CSV snapshots for an honest forward "
                 "test.")
+
+    # ---- Formula record
+    st.divider()
+    st.subheader("📈 Formula record")
+    saved_f_hist = snap.list_saved_formula_local(int(season))
+    if not saved_f_hist and gh_token and gh_repo:
+        try:
+            import base64 as _b64
+            saved_f_hist = []
+            for wk in range(1, 19):
+                _, txt = snap.get_existing(gh_repo, gh_token,
+                                           snap.formula_path(int(season), wk))
+                if txt:
+                    saved_f_hist.append((wk, txt))
+        except Exception:
+            saved_f_hist = []
+    if not saved_f_hist:
+        st.info("No saved Formula picks yet. Save them from the Best Bets tab "
+                "before kickoff and they'll be graded here.")
+    else:
+        gf = hist.grade_formula(int(season), saved_f_hist)
+        if not gf:
+            st.info("Formula picks saved, but none of those games are final.")
+        else:
+            of = hist.overall(gf)
+            g1, g2, g3, g4 = st.columns(4)
+            g1.metric("Record", f"{of['W']}-{of['L']}"
+                      + (f"-{of['P']}" if of['P'] else ""))
+            g2.metric("Win %", f"{of['win_pct']}%" if of['win_pct'] is not None else "—")
+            g3.metric("Units (-110)", f"{of['units']:+.2f}")
+            g4.metric("Breakeven", f"{of['breakeven']}%")
+            st.markdown("**Win % by money − bets differential**")
+            board_table(pd.DataFrame(hist.diff_buckets(gf)),
+                        dim_cols=("bucket",))
+            st.markdown("**Graded Formula picks**")
+            board_table(pd.DataFrame(gf),
+                        team_cols=("away", "home", "side"),
+                        signal_cols=("result",),
+                        dim_cols=("week", "market", "score"))
