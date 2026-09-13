@@ -163,3 +163,84 @@ def grade_snapshots(season: int, saved: list[tuple[int, str]],
                 note=flag["detail"],
             ))
     return graded
+
+
+def grade_total(side: str, total: float, home_score: int,
+                away_score: int) -> str | None:
+    """'W'/'L'/'P' for an Over/Under ticket."""
+    if total is None or not side:
+        return None
+    combined = home_score + away_score
+    if abs(combined - total) < 1e-9:
+        return "P"
+    went_over = combined > total
+    if side.lower() == "over":
+        return "W" if went_over else "L"
+    if side.lower() == "under":
+        return "L" if went_over else "W"
+    return None
+
+
+def grade_formula(season: int, saved: list[tuple[int, str]]) -> list[dict]:
+    """Grade saved Formula picks (spreads and totals) against results."""
+    import csv as _csv
+    import io as _io
+
+    from .datasources import espn
+
+    graded: list[dict] = []
+    for wk, text in saved:
+        try:
+            games = {(g["away"], g["home"]): g
+                     for g in espn.fetch_week(season, wk)}
+        except Exception:
+            continue
+        for row in _csv.DictReader(_io.StringIO(text)):
+            away, home = row.get("Away"), row.get("Home")
+            g = games.get((away, home))
+            if not g or not g.get("completed"):
+                continue
+            market, side = row.get("Market"), row.get("Side")
+            hs, as_ = g["home_score"], g["away_score"]
+            if market == "spread":
+                try:
+                    line = float(row["HomeSpread"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                res = grade_pick(side, home, away, line, hs, as_)
+                num = line
+            elif market == "total":
+                try:
+                    num = float(row["Total"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                res = grade_total(side, num, hs, as_)
+            else:
+                continue
+            if res is None:
+                continue
+            try:
+                diff = float(row.get("Diff") or 0)
+            except ValueError:
+                diff = 0.0
+            graded.append(dict(
+                week=wk, away=away, home=home, market=market, side=side,
+                number=num, bets=row.get("Bets%"), money=row.get("Money%"),
+                diff=diff, score=f"{as_}-{hs}", result=res,
+            ))
+    return graded
+
+
+def diff_buckets(graded: list[dict]) -> list[dict]:
+    """Win% by money-minus-bets differential — does a bigger split matter?"""
+    rows = []
+    for lo, hi in [(5, 10), (10, 15), (15, 25), (25, 100)]:
+        sel = [g for g in graded if lo <= g.get("diff", 0) < hi]
+        w = sum(1 for g in sel if g["result"] == "W")
+        l = sum(1 for g in sel if g["result"] == "L")
+        p = sum(1 for g in sel if g["result"] == "P")
+        dec = w + l
+        rows.append(dict(bucket=(f"{lo}-{hi}" if hi < 100 else f"{lo}+"),
+                         n=len(sel), W=w, L=l, P=p,
+                         win_pct=round(100 * w / dec, 1) if dec else None))
+    return rows
