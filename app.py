@@ -541,9 +541,13 @@ with tab_best:
     else:
         # only games not yet saved AND not yet kicked off
         live_keys = {(r["away"], r["home"]) for r in live}
-        board_unsaved = df[(df["Saved"] == "")
-                           & [(a_, h_) in live_keys
-                              for a_, h_ in zip(df["Away"], df["Home"])]]
+        # df is sorted by Edge, so its index is shuffled — the mask must be a
+        # Series carrying that same index. A bare list is rejected outright by
+        # current pandas rather than silently misaligning.
+        is_live = pd.Series(
+            [(a_, h_) in live_keys
+             for a_, h_ in zip(df["Away"], df["Home"])], index=df.index)
+        board_unsaved = df[(df["Saved"] == "") & is_live]
         day_of = {(r["away"], r["home"]): r["game_day"] for r in live}
         f_pending = [x for x in (sp_rows + ou_rows) if not x["Saved"]]
         days = list(dict.fromkeys(board_unsaved["Day"].tolist()))
