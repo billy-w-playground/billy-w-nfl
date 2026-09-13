@@ -181,3 +181,83 @@ def save_ratings(repo: str, token: str, season: int, week: int,
                      headers=_headers(token), json=payload, timeout=timeout)
     r.raise_for_status()
     return "created"
+
+
+FORMULA_DIR = "formula"
+
+
+def formula_path(season: int, week: int) -> str:
+    return f"{FORMULA_DIR}/{season}_wk{int(week):02d}.csv"
+
+
+def saved_formula(repo: str, token: str, season: int, week: int,
+                  timeout: int = 20) -> set[tuple[str, str, str, str]]:
+    """(away, home, market, side) tuples already recorded for this week."""
+    import csv as _csv
+    import io as _io
+    _, text = get_existing(repo, token, formula_path(season, week), timeout)
+    if not text:
+        return set()
+    return {(r.get("Away", ""), r.get("Home", ""), r.get("Market", ""),
+             r.get("Side", "")) for r in _csv.DictReader(_io.StringIO(text))}
+
+
+def save_formula(repo: str, token: str, season: int, week: int,
+                 rows: list[dict], fieldnames: list[str],
+                 timeout: int = 20) -> tuple[int, int]:
+    """Merge Formula picks into the week's file, one row per (game, market,
+    side), FIRST save wins — same rule as the Walters boards, so a pick
+    recorded before kickoff can never be rewritten afterwards."""
+    import csv as _csv
+    import io as _io
+
+    path = formula_path(season, week)
+    sha, text = get_existing(repo, token, path, timeout)
+    existing = list(_csv.DictReader(_io.StringIO(text))) if text else []
+    have = {(r.get("Away", ""), r.get("Home", ""), r.get("Market", ""),
+             r.get("Side", "")) for r in existing}
+
+    added = 0
+    for row in rows:
+        key = (str(row.get("Away", "")), str(row.get("Home", "")),
+               str(row.get("Market", "")), str(row.get("Side", "")))
+        if key in have:
+            continue
+        existing.append({k: row.get(k, "") for k in fieldnames})
+        have.add(key)
+        added += 1
+    skipped = len(rows) - added
+    if added == 0:
+        return 0, skipped
+
+    buf = _io.StringIO()
+    w = _csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    w.writeheader()
+    w.writerows(existing)
+    payload = {
+        "message": f"Formula picks {season} wk{week}: +{added}",
+        "content": base64.b64encode(buf.getvalue().encode()).decode(),
+    }
+    if sha:
+        payload["sha"] = sha
+    r = requests.put(f"{API}/repos/{repo}/contents/{path}",
+                     headers=_headers(token), json=payload, timeout=timeout)
+    r.raise_for_status()
+    return added, skipped
+
+
+def list_saved_formula_local(season: int | None = None) -> list[tuple[int, str]]:
+    d = Path(__file__).resolve().parent.parent / FORMULA_DIR
+    out = []
+    if not d.is_dir():
+        return out
+    for p in sorted(d.glob("*.csv")):
+        try:
+            seas, wk = p.stem.split("_wk")
+            seas, wk = int(seas), int(wk)
+        except ValueError:
+            continue
+        if season is not None and seas != season:
+            continue
+        out.append((wk, p.read_text(encoding="utf-8-sig")))
+    return sorted(out)
