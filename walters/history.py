@@ -219,16 +219,57 @@ def grade_formula(season: int, saved: list[tuple[int, str]]) -> list[dict]:
                 continue
             if res is None:
                 continue
-            try:
-                diff = float(row.get("Diff") or 0)
-            except ValueError:
-                diff = 0.0
+            def _f(key, default=None):
+                try:
+                    return float(row.get(key))
+                except (TypeError, ValueError):
+                    return default
             graded.append(dict(
                 week=wk, away=away, home=home, market=market, side=side,
-                number=num, bets=row.get("Bets%"), money=row.get("Money%"),
-                diff=diff, score=f"{as_}-{hs}", result=res,
+                number=num, bets=_f("Bets%"), money=_f("Money%"),
+                diff=_f("Diff", 0.0) or 0.0, move=_f("Move"),
+                score=f"{as_}-{hs}", result=res,
             ))
     return graded
+
+
+def filter_formula(graded: list[dict], max_bets: float = 100.0,
+                   max_money: float = 100.0, min_diff: float = -100.0,
+                   require_non_adverse: bool = False) -> list[dict]:
+    """Apply a rule UNIFORMLY to every logged side.
+
+    This is the honest way to test a threshold: the log contains every side
+    of every game, so a rule is scored against the plays it would have
+    skipped as well as the ones it would have taken. Picking winners after
+    the fact is not the same operation.
+    """
+    out = []
+    for g in graded:
+        b, m, d = g.get("bets"), g.get("money"), g.get("diff", 0.0)
+        if b is None or m is None:
+            continue
+        if b >= max_bets or m >= max_money or d < min_diff:
+            continue
+        if require_non_adverse and g.get("move") is not None and g["move"] < 0:
+            continue
+        out.append(g)
+    return out
+
+
+def money_buckets(graded: list[dict]) -> list[dict]:
+    """Win% by the side's share of the money — is the 40% cap real?"""
+    rows = []
+    for lo, hi in [(0, 30), (30, 40), (40, 50), (50, 60), (60, 101)]:
+        sel = [g for g in graded
+               if g.get("money") is not None and lo <= g["money"] < hi]
+        w = sum(1 for g in sel if g["result"] == "W")
+        l = sum(1 for g in sel if g["result"] == "L")
+        p = sum(1 for g in sel if g["result"] == "P")
+        dec = w + l
+        rows.append(dict(bucket=f"{lo}-{hi}%" if hi < 101 else f"{lo}%+",
+                         n=len(sel), W=w, L=l, P=p,
+                         win_pct=round(100 * w / dec, 1) if dec else None))
+    return rows
 
 
 def diff_buckets(graded: list[dict]) -> list[dict]:
