@@ -308,6 +308,24 @@ else:
         hfa=hfa, factor_scale=factor_scale,
         sb_winner=sb_winner, sb_loser=sb_loser)
 
+def slate_of(day: str, hour: float | None) -> str:
+    """Group games by KICKOFF WINDOW, not just day.
+
+    Saving all of Sunday at 11am freezes the Sunday-night number nine hours
+    early, and lines move. International games kick around 9:30am ET, which
+    is earlier still, so they get their own window too.
+    """
+    if day != "Sun" or hour is None:
+        return day
+    if hour < 12:
+        return "Sun AM"
+    if hour < 15:
+        return "Sun early"
+    if hour < 18:
+        return "Sun late"
+    return "Sun night"
+
+
 def bet_str(r):
     """'SEA -3.0' — the actual ticket, not a model number."""
     m = r["market_home_spread"]
@@ -330,6 +348,7 @@ for _r in results:
             _flags.append("⚠️ VENUE?")
     _rows.append({
         "Away": _r["away"], "Home": _r["home"], "Day": _r["game_day"],
+        "Slate": slate_of(_r["game_day"], _r.get("kickoff_et_hour")),
         "Walters (Home)": _r["walters_home_line"],
         "Market (Home)": _r["market_home_spread"],
         "Edge": (abs(_r["edge"]) if _r["edge"] is not None else None),
@@ -379,8 +398,18 @@ with tab_best:
 
     # A game that has kicked off is not a bet any more. This is separate
     # from "already saved" — it drops finished games even if never recorded.
-    live = [r for r in results if not r.get("completed_scores")]
-    dropped = len(results) - len(live)
+    backfill = st.checkbox(
+        "Backfill: include games that already kicked off", value=False,
+        key="bb_backfill",
+        help="Splits and the closing line are fixed at kickoff, so logging "
+             "them afterwards is not hindsight. But the WALTERS line depends "
+             "on power ratings — safe only while this week's ratings are "
+             "pinned by a committed ratings file (or already archived). "
+             "After Sonny Moore updates, a backfilled board carries "
+             "look-ahead bias.")
+    live = results if backfill else [r for r in results
+                                     if not r.get("completed_scores")]
+    dropped = 0 if backfill else len(results) - len(live)
 
     saved_w = already
 
@@ -388,6 +417,15 @@ with tab_best:
                                 key="bb_hide_saved")
     if dropped:
         st.caption(f"{dropped} game(s) already kicked off and are excluded.")
+    if backfill:
+        n_done = sum(1 for r in results if r.get("completed_scores"))
+        st.warning(f"Backfill on — {n_done} completed game(s) included. "
+                   "Ratings this week: "
+                   + ("pinned by a committed file, so the board reproduces "
+                      "exactly." if had_file else
+                      "live Sonny Moore, which has moved since kickoff — the "
+                      "Walters lines will NOT match what the model showed at "
+                      "the time."))
 
     splits = load_splits(int(season), int(week))
     if not splits:
@@ -404,7 +442,8 @@ with tab_best:
             continue
         w_rows.append({
             "Saved": "✓" if is_saved else "",
-            "Away": r["away"], "Home": r["home"], "Day": r["game_day"],
+            "Away": r["away"], "Home": r["home"],
+            "Slate": slate_of(r["game_day"], r.get("kickoff_et_hour")),
             "Bet": bet_str(r), "Edge": round(abs(r["edge"]), 1),
             "Walters": r["walters_home_line"], "Market": r["market_home_spread"],
             "Flags": ("🚑" if r["qb_flag"] else ""),
@@ -413,7 +452,7 @@ with tab_best:
     if w_rows:
         board_table(pd.DataFrame(sorted(w_rows, key=lambda x: -x["Edge"])),
                     team_cols=("Away", "Home", "Bet"), signal_cols=("Bet",),
-                    dim_cols=("Saved", "Day", "Flags"))
+                    dim_cols=("Saved", "Slate", "Flags"))
     else:
         st.info("No games clear that edge.")
 
@@ -421,7 +460,7 @@ with tab_best:
     def _move(cur, opn):
         return None if (cur is None or opn is None) else round(cur - opn, 1)
 
-    sp_rows, ou_rows = [], []
+    sp_rows, ou_rows, all_rows = [], [], []
     for r in live:
         s = splits.get((r["away"], r["home"]))
         if not s:
@@ -436,6 +475,19 @@ with tab_best:
             (r["home"], s.get("home_bets_pct"), s.get("home_money_pct"),
              mv_home, oh, ch),
         ):
+            # Log EVERY side, qualified or not — thresholds can only be
+            # tested against the games they would have excluded.
+            if bets is not None and money is not None:
+                all_rows.append({
+                    "Away": r["away"], "Home": r["home"],
+                    "Slate": slate_of(r["game_day"], r.get("kickoff_et_hour")),
+                    "Market": "spread", "Side": side,
+                    "HomeSpread": ch, "Total": "",
+                    "Open": opn, "Now": now,
+                    "Bets%": bets, "Money%": money,
+                    "Diff": round(money - bets, 1),
+                    "Move": "" if mv is None else mv,
+                })
             sig = splits_api.formula_signal(bets, money, max_money, min_diff,
                                             max_bets, mv)
             # Reject a line that moved AGAINST the side. Flat (0.0) passes.
@@ -465,6 +517,17 @@ with tab_best:
             ("Under", s.get("under_bets_pct"), s.get("under_money_pct"),
              None if mv_over is None else -mv_over),
         ):
+            if bets is not None and money is not None:
+                all_rows.append({
+                    "Away": r["away"], "Home": r["home"],
+                    "Slate": slate_of(r["game_day"], r.get("kickoff_et_hour")),
+                    "Market": "total", "Side": side,
+                    "HomeSpread": "", "Total": now_total,
+                    "Open": open_total, "Now": now_total,
+                    "Bets%": bets, "Money%": money,
+                    "Diff": round(money - bets, 1),
+                    "Move": "" if mv is None else mv,
+                })
             sig = splits_api.formula_signal(bets, money, max_money, min_diff,
                                             max_bets, mv)
             if sig and (mv is None or mv >= 0):
@@ -518,9 +581,10 @@ with tab_best:
     st.divider()
     st.markdown("##### Save a slate")
     st.caption("One button per slate. Saves the full Walters board for those "
-               "games AND any qualifying Formula picks, with the numbers as "
-               "they stand now. First save of anything wins, so a later run "
-               "can never rewrite a pre-kickoff record.")
+               "games AND the complete bets/money split for every side — not "
+               "just the ones that clear today's thresholds, because a "
+               "threshold can only be tested against the games it would have "
+               "excluded. First save of anything wins.")
 
     if not (GH_TOKEN and GH_REPO):
         st.info("Add `github_token` and `github_repo` in the app's Streamlit "
@@ -548,31 +612,45 @@ with tab_best:
             [(a_, h_) in live_keys
              for a_, h_ in zip(df["Away"], df["Home"])], index=df.index)
         board_unsaved = df[(df["Saved"] == "") & is_live]
-        day_of = {(r["away"], r["home"]): r["game_day"] for r in live}
-        f_pending = [x for x in (sp_rows + ou_rows) if not x["Saved"]]
-        days = list(dict.fromkeys(board_unsaved["Day"].tolist()))
+        day_of = {(r["away"], r["home"]):
+                  slate_of(r["game_day"], r.get("kickoff_et_hour"))
+                  for r in live}
+        # chronological, not the Edge-sorted order the board happens to be in
+        _first = {}
+        for r in live:
+            sl = slate_of(r["game_day"], r.get("kickoff_et_hour"))
+            d = r.get("date_utc") or ""
+            if sl not in _first or d < _first[sl]:
+                _first[sl] = d
+        f_pending = [x for x in all_rows
+                     if (x["Away"], x["Home"], x["Market"], x["Side"])
+                     not in saved_f]
+        days = sorted(set(board_unsaved["Slate"].tolist()),
+                      key=lambda s: _first.get(s, "9999"))
         if not days:
             st.success("Every game still to come is already saved.")
         else:
             counts = {}
             for d in days:
-                g = int((board_unsaved["Day"] == d).sum())
+                g = int((board_unsaved["Slate"] == d).sum())
                 f = sum(1 for x in f_pending
                         if day_of.get((x["Away"], x["Home"])) == d)
                 counts[d] = (g, f)
             picks = st.multiselect(
-                "Which slate(s)?", options=days, default=days,
+                "Which slate(s)?", options=days, default=days[:1],
                 key="save_slates",
                 format_func=lambda d: (f"{d} — {counts[d][0]} game"
                                        f"{'s' if counts[d][0] != 1 else ''}"
                                        + (f" + {counts[d][1]} Formula"
                                           if counts[d][1] else "")),
-                help="Save each slate before its kickoff.")
-            sel_board = board_unsaved[board_unsaved["Day"].isin(picks)]
+                help="Save each window before its own kickoff. Only the "
+                     "next one is selected by default — saving a later "
+                     "window early freezes a line that is still moving.")
+            sel_board = board_unsaved[board_unsaved["Slate"].isin(picks)]
             sel_formula = [x for x in f_pending
                            if day_of.get((x["Away"], x["Home"])) in picks]
             label = (f"💾 Save {len(sel_board)} game(s)"
-                     + (f" + {len(sel_formula)} Formula pick(s)"
+                     + (f" + {len(sel_formula)} split row(s)"
                         if sel_formula else ""))
             if st.button(label, type="primary", use_container_width=True,
                          disabled=sel_board.empty and not sel_formula,
@@ -601,7 +679,7 @@ with tab_best:
                     errs.append(f"board: {e}")
                 if sel_formula:
                     try:
-                        fcols = ["Away", "Home", "Market", "Side",
+                        fcols = ["Away", "Home", "Slate", "Market", "Side",
                                  "HomeSpread", "Total", "Open", "Now",
                                  "Bets%", "Money%", "Diff", "Move"]
                         fadd, _ = snap.save_formula(
@@ -609,7 +687,7 @@ with tab_best:
                             sel_formula, fcols)
                         if fadd:
                             msgs.append(
-                                f"{fadd} Formula pick(s) → "
+                                f"{fadd} split row(s) → "
                                 f"{snap.formula_path(int(season), int(week))}")
                     except Exception as e:
                         errs.append(f"formula: {e}")
@@ -828,7 +906,7 @@ with tab_hist:
 
     # ---- Formula record
     st.divider()
-    st.subheader("📈 Formula record")
+    st.subheader("📈 Formula — test a rule against the full log")
     saved_f_hist = snap.list_saved_formula_local(int(season))
     if not saved_f_hist and gh_token and gh_repo:
         try:
@@ -842,25 +920,51 @@ with tab_hist:
         except Exception:
             saved_f_hist = []
     if not saved_f_hist:
-        st.info("No saved Formula picks yet. Save them from the Best Bets tab "
-                "before kickoff and they'll be graded here.")
+        st.info("No split data saved yet. Save a slate from the Best Bets "
+                "tab before kickoff — every side of every game is logged, "
+                "and this section then lets you test any rule against it.")
     else:
-        gf = hist.grade_formula(int(season), saved_f_hist)
-        if not gf:
-            st.info("Formula picks saved, but none of those games are final.")
+        gf_all = hist.grade_formula(int(season), saved_f_hist)
+        if not gf_all:
+            st.info("Splits saved, but none of those games are final.")
         else:
+            st.caption(f"{len(gf_all)} graded sides logged. The log holds "
+                       "EVERY side of every game, so a rule below is scored "
+                       "against the plays it would have skipped too — that's "
+                       "what makes the number honest. Picking winners after "
+                       "the fact is a different and useless exercise.")
+            h1, h2, h3, h4 = st.columns(4)
+            t_bets = h1.slider("Max bets %", 5.0, 100.0, 30.0, 1.0,
+                               key="hist_bets")
+            t_money = h2.slider("Max money %", 20.0, 100.0, 40.0, 1.0,
+                                key="hist_money")
+            t_diff = h3.slider("Min differential", -10.0, 30.0, 5.0, 0.5,
+                               key="hist_diff")
+            t_move = h4.checkbox("Line must not move against",
+                                 value=False, key="hist_move")
+            gf = hist.filter_formula(gf_all, t_bets, t_money, t_diff, t_move)
+
             of = hist.overall(gf)
             g1, g2, g3, g4 = st.columns(4)
-            g1.metric("Record", f"{of['W']}-{of['L']}"
+            g1.metric("Record (this rule)", f"{of['W']}-{of['L']}"
                       + (f"-{of['P']}" if of['P'] else ""))
             g2.metric("Win %", f"{of['win_pct']}%" if of['win_pct'] is not None else "—")
             g3.metric("Units (-110)", f"{of['units']:+.2f}")
-            g4.metric("Breakeven", f"{of['breakeven']}%")
-            st.markdown("**Win % by money − bets differential**")
-            board_table(pd.DataFrame(hist.diff_buckets(gf)),
+            g4.metric("Plays", of["n"])
+
+            st.markdown("**Win % by money − bets differential** "
+                        "(all logged sides, rule ignored)")
+            board_table(pd.DataFrame(hist.diff_buckets(gf_all)),
                         dim_cols=("bucket",))
-            st.markdown("**Graded Formula picks**")
-            board_table(pd.DataFrame(gf),
-                        team_cols=("away", "home", "side"),
-                        signal_cols=("result",),
-                        dim_cols=("week", "market", "score"))
+            st.markdown("**Win % by the side's share of the money** "
+                        "(is a 40% cap the right line?)")
+            board_table(pd.DataFrame(hist.money_buckets(gf_all)),
+                        dim_cols=("bucket",))
+            st.markdown("**Sides selected by the rule above**")
+            if gf:
+                board_table(pd.DataFrame(gf),
+                            team_cols=("away", "home", "side"),
+                            signal_cols=("result",),
+                            dim_cols=("week", "market", "score"))
+            else:
+                st.write("No logged side clears that rule.")
