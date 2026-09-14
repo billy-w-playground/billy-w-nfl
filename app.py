@@ -687,7 +687,10 @@ with tab_best:
                     "Started": st.column_config.TextColumn(
                         "▶", help="Game has kicked off"),
                 })
-            chosen = ed[ed["Include"]].drop(columns=["Include"])
+            # data_editor returns None for rows never touched, and pandas
+            # refuses an NA-containing mask — coerce before indexing.
+            _inc = ed["Include"].fillna(False).astype(bool)
+            chosen = ed[_inc].drop(columns=["Include"])
             if not (GH_TOKEN and GH_REPO):
                 st.info("Add `github_token`/`github_repo` in Secrets to save.")
             elif SAVE_PW and not st.session_state.get("save_unlocked"):
