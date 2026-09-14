@@ -228,6 +228,7 @@ def grade_formula(season: int, saved: list[tuple[int, str]]) -> list[dict]:
                 week=wk, away=away, home=home, market=market, side=side,
                 number=num, bets=_f("Bets%"), money=_f("Money%"),
                 diff=_f("Diff", 0.0) or 0.0, move=_f("Move"),
+                late=(str(row.get("SelectedAfterStart", "")).upper() == "Y"),
                 score=f"{as_}-{hs}", result=res,
             ))
     return graded
