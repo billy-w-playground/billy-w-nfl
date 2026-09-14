@@ -1,3 +1,4 @@
-Away,Home,Market,Side,HomeSpread,Total,Open,Now,Bets%,Money%,Diff,Move
-TB,CIN,total,Over,,50.5,50.5,50.5,10,25,15,0.0
-ARI,LAC,total,Over,,47.5,45.5,47.5,10,13,3,2.0
+Away,Home,Slate,Kickoff,Market,Side,HomeSpread,Total,Open,Now,Bets%,Money%,Diff,Move,SelectedAt,SelectedAfterStart
+TB,CIN,,,total,Over,,50.5,50.5,50.5,10,25,15,0.0,,
+ARI,LAC,,,total,Over,,47.5,45.5,47.5,10,13,3,2.0,,
+CHI,CAR,Sun,Sun 1:00 PM,total,Over,,,nan,nan,11,52,41,,2026-09-13T20:28:46.086171-04:00,Y
