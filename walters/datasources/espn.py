@@ -88,6 +88,9 @@ def fetch_week(season: int, week: int, seasontype: int = 2, timeout: int = 20) -
             neutral_site=bool(comp.get("neutralSite", False)),
             venue=venue_name,
             completed=bool(status.get("completed", False)),
+            # pre / in / post — "started" is state != pre, which catches
+            # games in progress as well as finished ones.
+            state=str(status.get("state", "")),
             home_score=int(home.get("score") or 0),
             away_score=int(away.get("score") or 0),
             market_home_spread=odds,
