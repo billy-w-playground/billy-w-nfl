@@ -382,11 +382,9 @@ GH_TOKEN = st.secrets.get("github_token", "")
 GH_REPO = st.secrets.get("github_repo", "")
 SAVE_PW = st.secrets.get("save_password", "")
 already = set()
-saved_f = set()
 if GH_TOKEN and GH_REPO:
     try:
         already = snap.saved_games(GH_REPO, GH_TOKEN, int(season), int(week))
-        saved_f = snap.saved_formula(GH_REPO, GH_TOKEN, int(season), int(week))
     except Exception:
         pass
 df["Saved"] = ["✓" if (a, h) in already else ""
@@ -436,7 +434,7 @@ with tab_best:
 
     saved_w = already
 
-    hide_recorded = st.checkbox("Hide picks already saved", value=True,
+    hide_recorded = st.checkbox("Hide Walters games already saved", value=True,
                                 key="bb_hide_saved")
     if dropped:
         st.caption(f"{dropped} game(s) already kicked off and are excluded.")
@@ -492,56 +490,6 @@ with tab_best:
 
     # ---- Formula screens (spreads and totals)
     sp_rows, ou_rows = [], []
-    # The manual log covers every game this week regardless of state; the
-    # screens above still only show live ones.
-    all_rows = []
-    for r in results:
-        s_all = splits.get((r["away"], r["home"]))
-        if not s_all:
-            continue
-        _ko = kickoff_et(r.get("date_utc"))
-        _started = bool(r.get("started"))
-        _mv_h = _move(r.get("open_home_spread"), r.get("market_home_spread"))
-        _oh, _ch = r.get("open_home_spread"), r.get("market_home_spread")
-        for _side, _b, _m, _mv, _op, _nw in (
-            (r["away"], s_all.get("away_bets_pct"), s_all.get("away_money_pct"),
-             None if _mv_h is None else -_mv_h,
-             None if _oh is None else -_oh, None if _ch is None else -_ch),
-            (r["home"], s_all.get("home_bets_pct"), s_all.get("home_money_pct"),
-             _mv_h, _oh, _ch),
-        ):
-            if _b is None or _m is None:
-                continue
-            all_rows.append({
-                "Include": False, "Started": "▶" if _started else "",
-                "Kickoff": _ko, "Away": r["away"], "Home": r["home"],
-                "Slate": slate_of(r["game_day"], r.get("kickoff_et_hour")),
-                "Market": "spread", "Side": _side,
-                "HomeSpread": _ch, "Total": "",
-                "Open": _op, "Now": _nw,
-                "Bets%": _b, "Money%": _m, "Diff": round(_m - _b, 1),
-                "Move": "" if _mv is None else _mv,
-            })
-        _mv_o = _move(r.get("market_total"), r.get("open_total"))
-        _nt, _ot = r.get("market_total"), r.get("open_total")
-        for _side, _b, _m, _mv in (
-            ("Over", s_all.get("over_bets_pct"), s_all.get("over_money_pct"), _mv_o),
-            ("Under", s_all.get("under_bets_pct"), s_all.get("under_money_pct"),
-             None if _mv_o is None else -_mv_o),
-        ):
-            if _b is None or _m is None:
-                continue
-            all_rows.append({
-                "Include": False, "Started": "▶" if _started else "",
-                "Kickoff": _ko, "Away": r["away"], "Home": r["home"],
-                "Slate": slate_of(r["game_day"], r.get("kickoff_et_hour")),
-                "Market": "total", "Side": _side,
-                "HomeSpread": "", "Total": _nt,
-                "Open": _ot, "Now": _nt,
-                "Bets%": _b, "Money%": _m, "Diff": round(_m - _b, 1),
-                "Move": "" if _mv is None else _mv,
-            })
-
     for r in live:
         s = splits.get((r["away"], r["home"]))
         if not s:
@@ -556,30 +504,13 @@ with tab_best:
             (r["home"], s.get("home_bets_pct"), s.get("home_money_pct"),
              mv_home, oh, ch),
         ):
-            # Log EVERY side, qualified or not — thresholds can only be
-            # tested against the games they would have excluded.
-            if bets is not None and money is not None:
-                all_rows.append({
-                    "Away": r["away"], "Home": r["home"],
-                    "Slate": slate_of(r["game_day"], r.get("kickoff_et_hour")),
-                    "Market": "spread", "Side": side,
-                    "HomeSpread": ch, "Total": "",
-                    "Open": opn, "Now": now,
-                    "Bets%": bets, "Money%": money,
-                    "Diff": round(money - bets, 1),
-                    "Move": "" if mv is None else mv,
-                })
             sig = splits_api.formula_signal(bets, money, max_money, min_diff,
                                             max_bets, mv)
             # Reject a line that moved AGAINST the side. Flat (0.0) passes.
             # Both numbers are ESPN/DraftKings, so the comparison is
             # same-book; mixing in a consensus "now" made phantom moves.
             if sig and (mv is None or mv >= 0):
-                is_saved = (r["away"], r["home"], "spread", side) in saved_f
-                if is_saved and hide_recorded:
-                    continue
                 sp_rows.append({
-                    "Saved": "✓" if is_saved else "",
                     "Away": r["away"], "Home": r["home"],
                     "Market": "spread", "Side": side,
                     "HomeSpread": ch, "Open": opn, "Now": now,
@@ -598,25 +529,10 @@ with tab_best:
             ("Under", s.get("under_bets_pct"), s.get("under_money_pct"),
              None if mv_over is None else -mv_over),
         ):
-            if bets is not None and money is not None:
-                all_rows.append({
-                    "Away": r["away"], "Home": r["home"],
-                    "Slate": slate_of(r["game_day"], r.get("kickoff_et_hour")),
-                    "Market": "total", "Side": side,
-                    "HomeSpread": "", "Total": now_total,
-                    "Open": open_total, "Now": now_total,
-                    "Bets%": bets, "Money%": money,
-                    "Diff": round(money - bets, 1),
-                    "Move": "" if mv is None else mv,
-                })
             sig = splits_api.formula_signal(bets, money, max_money, min_diff,
                                             max_bets, mv)
             if sig and (mv is None or mv >= 0):
-                is_saved = (r["away"], r["home"], "total", side) in saved_f
-                if is_saved and hide_recorded:
-                    continue
                 ou_rows.append({
-                    "Saved": "✓" if is_saved else "",
                     "Away": r["away"], "Home": r["home"],
                     "Market": "total", "Side": side,
                     "Total": now_total, "Open": open_total, "Now": now_total,
@@ -632,7 +548,7 @@ with tab_best:
         _sp = pd.DataFrame(sorted(sp_rows, key=lambda x: -x["Diff"]))
         board_table(_sp.drop(columns=["Market", "HomeSpread"]),
                     team_cols=("Away", "Home", "Side"), signal_cols=("Side",),
-                    dim_cols=("Saved", "Open", "Now"))
+                    dim_cols=("Open", "Now"))
     else:
         st.info("No spread sides clear those thresholds.")
 
@@ -643,7 +559,7 @@ with tab_best:
         _ou = pd.DataFrame(sorted(ou_rows, key=lambda x: -x["Diff"]))
         board_table(_ou.drop(columns=["Market", "Total"]),
                     team_cols=("Away", "Home", "Side"), signal_cols=("Side",),
-                    dim_cols=("Saved", "Open", "Now"))
+                    dim_cols=("Open", "Now"))
     else:
         st.info("No totals sides clear those thresholds.")
 
@@ -655,80 +571,15 @@ with tab_best:
         st.subheader("🎯 Both screens agree")
         board_table(pd.DataFrame(both).drop(columns=["Market", "HomeSpread"]),
                     team_cols=("Away", "Home", "Side"), signal_cols=("Side",),
-                    dim_cols=("Saved", "Open", "Now"))
+                    dim_cols=("Open", "Now"))
 
-
-    # ---- manual Formula log: pick exactly what counts
-    st.divider()
-    st.markdown("##### Formula log — choose what counts")
-    st.caption("Every side of every game this week, started or not. Tick what "
-               "you want tracked and save. Each pick is stamped with the time "
-               "you selected it and whether the game had already started, and "
-               "History reports pre-kickoff and post-kickoff selections "
-               "separately — a pick ticked after the result is known can't "
-               "masquerade as a read.")
-    if not all_rows:
-        st.info("No splits available for this week yet.")
-    else:
-        show = [r for r in all_rows
-                if (r["Away"], r["Home"], r["Market"], r["Side"])
-                not in saved_f]
-        st.caption(f"{len(all_rows) - len(show)} side(s) already logged; "
-                   f"{len(show)} still selectable.")
-        if show:
-            ed = st.data_editor(
-                pd.DataFrame(show),
-                key="formula_editor", hide_index=True,
-                use_container_width=True,
-                disabled=[c for c in show[0] if c != "Include"],
-                column_config={
-                    "Include": st.column_config.CheckboxColumn(
-                        "Log it", help="Track this side's result"),
-                    "Started": st.column_config.TextColumn(
-                        "▶", help="Game has kicked off"),
-                })
-            # data_editor returns None for rows never touched, and pandas
-            # refuses an NA-containing mask — coerce before indexing.
-            _inc = ed["Include"].fillna(False).astype(bool)
-            chosen = ed[_inc].drop(columns=["Include"])
-            if not (GH_TOKEN and GH_REPO):
-                st.info("Add `github_token`/`github_repo` in Secrets to save.")
-            elif SAVE_PW and not st.session_state.get("save_unlocked"):
-                st.info("Unlock saving below first.")
-            elif st.button(f"💾 Log {len(chosen)} selected side(s)",
-                           type="primary", use_container_width=True,
-                           disabled=chosen.empty, key="save_formula_manual"):
-                import datetime as _d
-                from zoneinfo import ZoneInfo as _Z
-                stamp = _d.datetime.now(_Z("America/New_York")).isoformat()
-                recs = chosen.to_dict("records")
-                for rec in recs:
-                    rec["SelectedAt"] = stamp
-                    rec["SelectedAfterStart"] = "Y" if rec.get("Started") else "N"
-                fcols = ["Away", "Home", "Slate", "Kickoff", "Market", "Side",
-                         "HomeSpread", "Total", "Open", "Now", "Bets%",
-                         "Money%", "Diff", "Move", "SelectedAt",
-                         "SelectedAfterStart"]
-                try:
-                    fadd, _ = snap.save_formula(GH_REPO, GH_TOKEN, int(season),
-                                                int(week), recs, fcols)
-                    late = sum(1 for r_ in recs
-                               if r_["SelectedAfterStart"] == "Y")
-                    msg = f"Logged {fadd} side(s)."
-                    if late:
-                        msg += (f" {late} selected after kickoff — tracked "
-                                "separately in History.")
-                    st.success(msg) if fadd else st.info("Nothing new.")
-                except Exception as e:
-                    st.error(f"Save failed: {e}")
-        else:
-            st.write("Every side this week is already logged.")
 
     # ---- save the Walters board, by slate
     st.divider()
     st.markdown("##### Save the Walters board")
-    st.caption("Board rows only — the Formula log above is separate. First "
-               "save of a game wins, so save each slate before its kickoff.")
+    st.caption("Saves the board for a kickoff window: the model line, the "
+               "market line and the pick for every game in it. First save of "
+               "a game wins, so save each window before it plays.")
 
     if not (GH_TOKEN and GH_REPO):
         st.info("Add `github_token` and `github_repo` in the app's Streamlit "
@@ -1000,85 +851,3 @@ with tab_hist:
                 "the model is being graded on. These figures flatter the "
                 "record — use the weekly CSV snapshots for an honest forward "
                 "test.")
-
-    # ---- Formula record
-    st.divider()
-    st.subheader("📈 Formula — test a rule against the full log")
-    saved_f_hist = snap.list_saved_formula_local(int(season))
-    if not saved_f_hist and gh_token and gh_repo:
-        try:
-            import base64 as _b64
-            saved_f_hist = []
-            for wk in range(1, 19):
-                _, txt = snap.get_existing(gh_repo, gh_token,
-                                           snap.formula_path(int(season), wk))
-                if txt:
-                    saved_f_hist.append((wk, txt))
-        except Exception:
-            saved_f_hist = []
-    if not saved_f_hist:
-        st.info("No split data saved yet. Save a slate from the Best Bets "
-                "tab before kickoff — every side of every game is logged, "
-                "and this section then lets you test any rule against it.")
-    else:
-        gf_all = hist.grade_formula(int(season), saved_f_hist)
-        if not gf_all:
-            st.info("Splits saved, but none of those games are final.")
-        else:
-            st.caption(f"{len(gf_all)} graded sides logged. The log holds "
-                       "EVERY side of every game, so a rule below is scored "
-                       "against the plays it would have skipped too — that's "
-                       "what makes the number honest. Picking winners after "
-                       "the fact is a different and useless exercise.")
-            h1, h2, h3, h4 = st.columns(4)
-            t_bets = h1.slider("Max bets %", 5.0, 100.0, 30.0, 1.0,
-                               key="hist_bets")
-            t_money = h2.slider("Max money %", 20.0, 100.0, 40.0, 1.0,
-                                key="hist_money")
-            t_diff = h3.slider("Min differential", -10.0, 30.0, 5.0, 0.5,
-                               key="hist_diff")
-            t_move = h4.checkbox("Line must not move against",
-                                 value=False, key="hist_move")
-            gf = hist.filter_formula(gf_all, t_bets, t_money, t_diff, t_move)
-
-            pre = [g for g in gf_all if not g.get("late")]
-            post = [g for g in gf_all if g.get("late")]
-            if post:
-                st.warning(
-                    f"{len(post)} logged side(s) were selected AFTER kickoff. "
-                    "Their record is shown separately below — a selection "
-                    "made once the result was visible is not evidence about "
-                    "the method.")
-                p1, p2 = st.columns(2)
-                op_, ol_ = hist.overall(pre), hist.overall(post)
-                p1.metric("Selected before kickoff",
-                          f"{op_['W']}-{op_['L']}"
-                          + (f" ({op_['win_pct']}%)" if op_['win_pct'] is not None else ""))
-                p2.metric("Selected after kickoff",
-                          f"{ol_['W']}-{ol_['L']}"
-                          + (f" ({ol_['win_pct']}%)" if ol_['win_pct'] is not None else ""))
-
-            of = hist.overall(gf)
-            g1, g2, g3, g4 = st.columns(4)
-            g1.metric("Record (this rule)", f"{of['W']}-{of['L']}"
-                      + (f"-{of['P']}" if of['P'] else ""))
-            g2.metric("Win %", f"{of['win_pct']}%" if of['win_pct'] is not None else "—")
-            g3.metric("Units (-110)", f"{of['units']:+.2f}")
-            g4.metric("Plays", of["n"])
-
-            st.markdown("**Win % by money − bets differential** "
-                        "(all logged sides, rule ignored)")
-            board_table(pd.DataFrame(hist.diff_buckets(gf_all)),
-                        dim_cols=("bucket",))
-            st.markdown("**Win % by the side's share of the money** "
-                        "(is a 40% cap the right line?)")
-            board_table(pd.DataFrame(hist.money_buckets(gf_all)),
-                        dim_cols=("bucket",))
-            st.markdown("**Sides selected by the rule above**")
-            if gf:
-                board_table(pd.DataFrame(gf),
-                            team_cols=("away", "home", "side"),
-                            signal_cols=("result",),
-                            dim_cols=("week", "market", "score"))
-            else:
-                st.write("No logged side clears that rule.")
