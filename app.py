@@ -208,8 +208,8 @@ if run:
     st.session_state.pop("run_data", None)
 
 if not run and "run_data" not in st.session_state:
-    st.info("Set the week and hit **Run model**. No keys needed for the "
-            "defaults; The Odds API key improves market lines.")
+    st.info("← Check the **week** in the left sidebar (it auto-rolls forward "
+            "to the current week), then hit **Run model**.")
     st.stop()
 
 if not run:
@@ -404,6 +404,51 @@ df = df.sort_values("Edge", ascending=False, na_position="last")
 
 st.caption(f"Now: {now_et()} — all kickoff times shown in Eastern.")
 
+
+# Saved-board grading is computed once, here, above the tabs. History owns the
+# detail but Best Bets shows the 5+ headline, and Streamlit runs every tab body
+# on every rerun regardless of which one is open — so hoisting costs nothing.
+_saved_boards = snap.list_saved_local(int(season))
+_saved_err = ""
+if not _saved_boards and GH_TOKEN and GH_REPO:
+    try:
+        _saved_boards = snap.list_saved(GH_REPO, GH_TOKEN, int(season))
+    except Exception as e:
+        _saved_err = str(e)
+try:
+    graded_all = (hist.grade_snapshots(int(season), _saved_boards,
+                                       load_qb_data(int(season)))
+                  if _saved_boards else [])
+except Exception as e:
+    graded_all, _saved_err = [], _saved_err or str(e)
+
+
+def record_box(col, label, graded, sub=""):
+    """A big, boxed W-L for a headline cut of the record.
+
+    n is rendered on the card on purpose: a 5+ edge filter leaves a handful of
+    games this early, and a bare '3-1' invites reading it as a trend.
+    """
+    o = hist.overall(graded)
+    rec = f"{o['W']}-{o['L']}" + (f"-{o['P']}" if o['P'] else "")
+    pct = f"{o['win_pct']}%" if o["win_pct"] is not None else "—"
+    if not o["n"]:
+        rec, pct = "—", "—"
+    with col.container(border=True):
+        st.markdown(
+            "<div style='text-align:center;padding:2px 0 6px'>"
+            "<div style='font-size:.78rem;letter-spacing:.06em;"
+            f"text-transform:uppercase;opacity:.65'>{label}</div>"
+            "<div style='font-size:2.6rem;font-weight:700;line-height:1.15;"
+            f"margin:2px 0'>{rec}</div>"
+            f"<div style='font-size:1.05rem;opacity:.85'>{pct} &nbsp;·&nbsp; "
+            f"{o['units']:+.2f}u</div>"
+            f"<div style='font-size:.78rem;opacity:.55;margin-top:3px'>"
+            f"n = {o['n']}{sub}</div></div>",
+            unsafe_allow_html=True)
+    return o
+
+
 tab_best, tab_w, tab_hist = st.tabs(
     ["⭐ Best Bets", "🏈 Walters Board", "📊 History & Edge Analysis"])
 
@@ -415,18 +460,32 @@ with tab_best:
                "strongest read, not a requirement. Open and Now are both "
                "ESPN/DraftKings numbers, so Move is real movement at one "
                "book. A side whose line moved against it is excluded.")
+
+    if graded_all:
+        r1, r2 = st.columns([1, 2])
+        record_box(r1, "Season record — Walters 5+ pt edge",
+                   hist.at_least(graded_all, 5.0), " picks graded")
+        r2.caption("Saved pre-kickoff boards only, graded against the closing "
+                   "number. Full breakdown by edge size is on the History "
+                   "tab — that's where a threshold gets earned rather than "
+                   "guessed.")
+
     f1, f2, f3, f4 = st.columns(4)
-    min_edge = f1.slider("Min Walters edge (pts)", 0.0, 12.0, 3.0, 0.5,
+    min_edge = f1.slider("Min Walters edge (pts)", 0.0, 12.0, 4.0, 0.5,
                          key="bb_min_edge",
                          help="Thresholds are unproven. The History tab's "
                               "edge buckets are how you find the real one.")
-    max_bets = f2.slider("Max bets % on the side", 5.0, 100.0, 30.0, 1.0,
+    max_bets = f2.slider("Max bets % on the side", 5.0, 100.0, 40.0, 1.0,
                          key="bb_max_bets",
                          help="Ticket minority — the public is elsewhere.")
     max_money = f3.slider("Max money % on the side", 20.0, 100.0, 40.0, 1.0,
                           key="bb_max_money")
-    min_diff = f4.slider("Min money − bets differential", 0.0, 30.0, 5.0, 0.5,
-                         key="bb_min_diff")
+    min_diff = f4.slider("Min money − bets differential", 0.0, 30.0, 1.0, 0.5,
+                         key="bb_min_diff",
+                         help="At 1 point this fires on close to half the "
+                              "board — a 1-pt gap is inside the rounding noise "
+                              "of published percentages. Raise it if Formula "
+                              "is showing you everything.")
 
     # A game that has kicked off is not a bet any more. This is separate
     # from "already saved" — it drops finished games even if never recorded.
@@ -755,18 +814,24 @@ with tab_w:
 # --- Tab 2: History & Edge Analysis -----------------------------------------
 with tab_hist:
     gh_token, gh_repo = GH_TOKEN, GH_REPO
-    saved = snap.list_saved_local(int(season))
-    if not saved and gh_token and gh_repo:
-        try:
-            saved = snap.list_saved(gh_repo, gh_token, int(season))
-        except Exception as e:
-            st.warning(f"Could not read saved boards: {e}")
+    saved, graded_s = _saved_boards, graded_all
+    if _saved_err:
+        st.warning(f"Could not read saved boards: {_saved_err}")
 
     if saved:
-        graded_s = hist.grade_snapshots(int(season), saved,
-                                        load_qb_data(int(season)))
         st.success(f"Grading {len(saved)} saved board(s) — no look-ahead bias.")
         if graded_s:
+            b1, b2 = st.columns(2)
+            o5 = record_box(b1, "Walters edge 5+ pts",
+                            hist.at_least(graded_s, 5.0), " picks")
+            o4 = record_box(b2, "Walters edge 4+ pts",
+                            hist.at_least(graded_s, 4.0), " picks")
+            if max(o5["n"], o4["n"]) < 20:
+                st.caption("Small samples. At n under ~20 a record this size "
+                           "is noise either way — breakeven is 52.4%, and it "
+                           "takes hundreds of bets to separate a real edge "
+                           "from a hot run.")
+            st.markdown("")
             o = hist.overall(graded_s)
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Record (all games)",
