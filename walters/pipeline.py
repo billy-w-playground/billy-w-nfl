@@ -145,6 +145,9 @@ def run_week(season: int, week: int,
             completed_scores=bool(g["completed"]),
             started=(g.get("state", "") != "pre"),
             date_utc=g.get("date_utc"),
+            # the app groups saves by kickoff window; without this it saw
+            # None and filed every Sunday game under one "Sun" slate
+            kickoff_et_hour=g.get("kickoff_et_hour"),
             home_score=g["home_score"], away_score=g["away_score"],
             qb_flag=bool(inj_h.get("qb_flag") or inj_a.get("qb_flag")),
             injury_count=int(inj_h.get("count", 0)) + int(inj_a.get("count", 0)),
