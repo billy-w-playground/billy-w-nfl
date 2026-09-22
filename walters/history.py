@@ -96,6 +96,13 @@ def bucket_stats(graded: list[dict]) -> list[dict]:
     return rows
 
 
+def at_least(graded: list[dict], min_edge: float) -> list[dict]:
+    """Picks whose absolute edge is >= min_edge. Absolute, because a -6 edge
+    on the away side is the same size disagreement as +6 on the home side."""
+    return [g for g in graded
+            if g.get("edge") is not None and abs(g["edge"]) >= min_edge]
+
+
 def overall(graded: list[dict]) -> dict:
     w = sum(1 for g in graded if g["result"] == "W")
     l = sum(1 for g in graded if g["result"] == "L")
