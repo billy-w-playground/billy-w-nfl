@@ -181,3 +181,101 @@ def save_ratings(repo: str, token: str, season: int, week: int,
                      headers=_headers(token), json=payload, timeout=timeout)
     r.raise_for_status()
     return "created"
+
+
+def _num(v):
+    try:
+        f = float(v)
+        return None if f != f else f          # NaN -> None
+    except (TypeError, ValueError):
+        return None
+
+
+def repair_week(repo: str, token: str, season: int, week: int,
+                fresh_rows: list[dict], fieldnames: list[str],
+                closing: dict, timeout: int = 20) -> dict:
+    """Fix a week's saved board without rewriting any real prediction.
+
+    * A row that already has a market line is LEFT ALONE — that's a genuine
+      pre-kickoff record and first-save-wins still applies.
+    * A row saved with an EMPTY market (saved after kickoff, when ESPN had
+      already dropped the odds) keeps its saved Walters line and gets the
+      closing spread from nflverse, with Edge and Bet derived from the two.
+    * A game missing entirely is added from `fresh_rows` — whatever the
+      current run computed — with the closing line filled in if ESPN has
+      none. Those rows are stamped Source=backfill.
+    Returns counts of each action.
+    """
+    import csv as _csv
+    import io as _io
+
+    path = path_for(season, week)
+    sha, text = get_existing(repo, token, path, timeout)
+    existing = list(_csv.DictReader(_io.StringIO(text))) if text else []
+    have = {(r.get("Away", ""), r.get("Home", "")): r for r in existing}
+    counts = dict(kept=0, filled=0, added=0, unresolved=0)
+
+    def derive(row):
+        w = _num(row.get("Walters (Home)"))
+        m = _num(row.get("Market (Home)"))
+        if w is None or m is None:
+            return
+        signed = m - w                      # + => home is the value side
+        row["Edge"] = round(abs(signed), 2)
+        if signed >= 1:
+            row["Bet"] = f"{row['Home']} {m:+.1f}"
+        elif signed <= -1:
+            row["Bet"] = f"{row['Away']} {-m:+.1f}"
+        else:
+            row["Bet"] = ""
+
+    for key, row in have.items():
+        if _num(row.get("Market (Home)")) is not None:
+            counts["kept"] += 1
+            continue
+        cl = closing.get((int(week), key[0], key[1])) or {}
+        if cl.get("home_spread") is None:
+            counts["unresolved"] += 1
+            continue
+        row["Market (Home)"] = cl["home_spread"]
+        row["Source"] = "closing-line repair"
+        derive(row)
+        counts["filled"] += 1
+
+    for fr in fresh_rows:
+        key = (str(fr.get("Away", "")), str(fr.get("Home", "")))
+        if key in have:
+            continue
+        row = {k: fr.get(k, "") for k in fieldnames}
+        if _num(row.get("Market (Home)")) is None:
+            cl = closing.get((int(week), key[0], key[1])) or {}
+            if cl.get("home_spread") is None:
+                counts["unresolved"] += 1
+                continue
+            row["Market (Home)"] = cl["home_spread"]
+        row["Source"] = "backfill"
+        derive(row)
+        existing.append(row)
+        have[key] = row
+        counts["added"] += 1
+
+    if not (counts["filled"] or counts["added"]):
+        return counts
+
+    cols = list(dict.fromkeys(list(fieldnames) + ["Source"]
+                              + [k for r in existing for k in r]))
+    buf = _io.StringIO()
+    w = _csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+    w.writeheader()
+    w.writerows(existing)
+    payload = {
+        "message": (f"Repair {season} wk{week}: "
+                    f"{counts['filled']} filled, {counts['added']} added"),
+        "content": base64.b64encode(buf.getvalue().encode()).decode(),
+    }
+    if sha:
+        payload["sha"] = sha
+    r = requests.put(f"{API}/repos/{repo}/contents/{path}",
+                     headers=_headers(token), json=payload, timeout=timeout)
+    r.raise_for_status()
+    return counts
