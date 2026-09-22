@@ -49,6 +49,16 @@ button[data-baseweb="tab"][aria-selected="true"] { color: #ffbf00; }
 st.markdown(BOARD_CSS, unsafe_allow_html=True)
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_closing(season: int) -> dict:
+    """nflverse closing lines — the market for games ESPN no longer quotes."""
+    from walters.datasources.closing import closing_lines
+    try:
+        return closing_lines(season)
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def load_splits(season: int, week: int) -> dict:
     """Public bets%/money% from scoresandodds (server-rendered HTML)."""
@@ -148,10 +158,10 @@ with st.sidebar:
                            help="Auto-detected from the schedule; override "
                                 "if you want a different week.")
     hfa = st.slider(
-        "Home field advantage (pts)", 0.0, 4.0, 1.0, 0.1,
+        "Home field advantage (pts)", 0.0, 4.0, 1.5, 0.1,
         help="Commonly assumed to be 3. Measured 1974-2022 it is nearer 2.5, "
              "and in the four seasons before Walters' book it was under 1 "
-             "point. Default 1.0 reflects the recent trend.")
+             "point. Default 1.5 splits the long-run and recent evidence.")
     # Book spec only: the chapter is explicit that each factor unit is worth
     # one-fifth of a point. The old raw weighting was a spreadsheet bug.
     factor_scale = BOOK_FACTOR_SCALE
@@ -376,6 +386,7 @@ for _r in results:
         "Bet": bet_str(_r),
         "Flags": " ".join(_flags),
         "Injuries": _r["injury_count"],
+        "HFA": hfa,
     })
 df = pd.DataFrame(_rows)
 GH_TOKEN = st.secrets.get("github_token", "")
@@ -851,3 +862,53 @@ with tab_hist:
                 "the model is being graded on. These figures flatter the "
                 "record — use the weekly CSV snapshots for an honest forward "
                 "test.")
+
+    # ---- repair / backfill the saved record for this week
+    st.divider()
+    st.subheader("🛠 Repair this week's record")
+    st.caption(
+        "Fills gaps in the saved board for the week you ran. Rows saved "
+        "after kickoff have an EMPTY market — ESPN drops the odds once a "
+        "game goes live — so they can't be graded. This fills those from "
+        "nflverse's closing line, keeping the saved Walters line untouched. "
+        "Games that were never saved at all are added from this run. Rows "
+        "that already have a market are never modified.")
+    started_keys = {(r["away"], r["home"]) for r in results
+                    if r.get("started") or r.get("completed_scores")}
+    n_missing = sum(1 for k in started_keys
+                    if k not in already)
+    st.caption(f"Week {int(week)}: {len(started_keys)} game(s) kicked off, "
+               f"{n_missing} of them not in the saved board.")
+    if n_missing and abs(hfa - 1.0) > 1e-9 and int(week) <= 2:
+        st.warning(
+            f"Missing games are computed with the CURRENT home-field "
+            f"setting ({hfa:g}). Weeks 1-2 were saved at 1.0 — set the "
+            "slider to 1.0 before repairing them so the week stays "
+            "internally consistent.")
+    if not (GH_TOKEN and GH_REPO):
+        st.info("Needs `github_token` and `github_repo` in Secrets.")
+    elif SAVE_PW and not st.session_state.get("save_unlocked"):
+        st.info("Unlock saving on the Best Bets tab first.")
+    elif st.button(f"🛠 Repair week {int(week)}", key="repair_btn",
+                   use_container_width=True):
+        closing = load_closing(int(season))
+        if not closing:
+            st.error("Couldn't load nflverse closing lines — nothing changed.")
+        else:
+            fresh = [row for row in df.to_dict("records")
+                     if (row["Away"], row["Home"]) in started_keys]
+            cols = [c for c in df.columns if not c.startswith("_")]
+            try:
+                c = snap.repair_week(GH_REPO, GH_TOKEN, int(season),
+                                     int(week), fresh, cols, closing)
+                st.success(
+                    f"Week {int(week)}: {c['filled']} empty market(s) filled, "
+                    f"{c['added']} missing game(s) added, {c['kept']} "
+                    f"original record(s) untouched"
+                    + (f", {c['unresolved']} without a closing line yet"
+                       if c['unresolved'] else "") + ".")
+                if c['unresolved']:
+                    st.caption("Unresolved games are usually ones nflverse "
+                               "hasn't posted yet — rerun the repair later.")
+            except Exception as e:
+                st.error(f"Repair failed: {e}")
