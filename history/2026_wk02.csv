@@ -1,17 +1,17 @@
-Away,Home,Day,Slate,Walters (Home),Market (Home),Edge,Bet,Flags,Injuries,HFA,Saved
-DET,BUF,Thu,Thu,-5.77,-5.5,0.27,,,0,,
-IND,KC,Sun,Sun,-7.24,-6.0,1.24,KC -6.0,,0,,
-CLE,TB,Sun,Sun,-2.51,nan,nan,,,0,,
-JAX,DEN,Sun,Sun,2.59,nan,nan,,,0,,
-LV,LAC,Sun,Sun,-0.14,nan,nan,,,0,,
-WSH,DAL,Sun,Sun,0.78,nan,nan,,,0,,
-SEA,ARI,Sun,Sun,7.81,nan,nan,,,0,,
-MIA,SF,Sun,Sun,-11.82,nan,nan,,,0,,
-CAR,ATL,Sun,Sun,-3.06,nan,nan,,,0,,
-MIN,CHI,Sun,Sun,-1.39,nan,nan,,,0,,
-PHI,TEN,Sun,Sun,5.96,nan,nan,,,0,,
-PIT,NE,Sun,Sun,-2.5,nan,nan,,,0,,
-GB,NYJ,Sun,Sun,-0.37,nan,nan,,,0,,
-NO,BAL,Sun,Sun,-5.58,nan,nan,,,0,,
-CIN,HOU,Sun,Sun,-3.68,nan,nan,,,0,,
-NYG,LAR,Mon,Mon,-4.47,,,,,0,1.5,
+Away,Home,Day,Slate,Walters (Home),Market (Home),Edge,Bet,Flags,Injuries,HFA,Saved,Source
+DET,BUF,Thu,Thu,-5.77,-5.5,0.27,,,0,,,
+IND,KC,Sun,Sun,-7.24,-6.0,1.24,KC -6.0,,0,,,
+CLE,TB,Sun,Sun,-2.51,-8.5,5.99,CLE +8.5,,0,,,closing-line repair
+JAX,DEN,Sun,Sun,2.59,-2.5,5.09,JAX +2.5,,0,,,closing-line repair
+LV,LAC,Sun,Sun,-0.14,-6.5,6.36,LV +6.5,,0,,,closing-line repair
+WSH,DAL,Sun,Sun,0.78,-3.5,4.28,WSH +3.5,,0,,,closing-line repair
+SEA,ARI,Sun,Sun,7.81,3.5,4.31,SEA -3.5,,0,,,closing-line repair
+MIA,SF,Sun,Sun,-11.82,-12.5,0.68,,,0,,,closing-line repair
+CAR,ATL,Sun,Sun,-3.06,2.5,5.56,ATL +2.5,,0,,,closing-line repair
+MIN,CHI,Sun,Sun,-1.39,-4.5,3.11,MIN +4.5,,0,,,closing-line repair
+PHI,TEN,Sun,Sun,5.96,7.0,1.04,TEN +7.0,,0,,,closing-line repair
+PIT,NE,Sun,Sun,-2.5,-4.5,2.0,PIT +4.5,,0,,,closing-line repair
+GB,NYJ,Sun,Sun,-0.37,3.5,3.87,NYJ +3.5,,0,,,closing-line repair
+NO,BAL,Sun,Sun,-5.58,-8.5,2.92,NO +8.5,,0,,,closing-line repair
+CIN,HOU,Sun,Sun,-3.68,-3.0,0.68,,,0,,,closing-line repair
+NYG,LAR,Mon,Mon,-4.47,-6.5,2.03,NYG +6.5,,0,1.5,,closing-line repair
