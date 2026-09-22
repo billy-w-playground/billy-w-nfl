@@ -126,8 +126,8 @@ def fetch(season: int | None = None, week: int | None = None,
 
 # --- the Formula ------------------------------------------------------------
 def formula_signal(bets_pct: float | None, money_pct: float | None,
-                   max_money: float = 40.0, min_diff: float = 5.0,
-                   max_bets: float = 30.0,
+                   max_money: float = 40.0, min_diff: float = 1.0,
+                   max_bets: float = 40.0,
                    line_move: float | None = None) -> dict | None:
     """A side qualifies on three conditions:
 
