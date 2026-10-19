@@ -1,13 +1,14 @@
-Away,Home,Day,Slate,Walters (Home),Market (Home),Edge,Bet,Flags,Injuries,HFA,Saved,Source
-SEA,DEN,Thu,Thu,3.54,2.5,1.04,SEA -2.5,🚑 QB,50,1.5,,backfill
-HOU,JAX,Sun,Sun AM,-11.36,-2.5,8.86,JAX -2.5,🌍 INTL,50,1.5,,backfill
-CHI,ATL,Sun,Sun early,4.56,1.5,3.06,CHI -1.5,🚑 QB,50,1.5,,backfill
-BAL,CLE,Sun,Sun early,5.35,3.0,2.35,BAL -3.0,🚑 QB,50,1.5,,backfill
-TEN,IND,Sun,Sun early,-8.47,-6.5,1.97,IND -6.5,🚑 QB,50,1.5,,backfill
-NYJ,NE,Sun,Sun early,-7.57,-7.5,0.07,,🚑 QB,50,1.5,,backfill
-NO,NYG,Sun,Sun early,-2.11,1.5,3.61,NYG +1.5,🚑 QB,50,1.5,,backfill
-CAR,PHI,Sun,Sun early,2.22,3.0,0.78,,🚑 QB,50,1.5,,backfill
-PIT,TB,Sun,Sun early,3.01,2.5,0.51,,🚑 QB,50,1.5,,backfill
-ARI,LAR,Sun,Sun late,-7.94,-12.5,4.56,ARI +12.5,🚑 QB,50,1.5,,backfill
-LAC,KC,Sun,Sun late,-16.07,-7.5,8.57,KC -7.5,🚑 QB,50,1.5,,backfill
-BUF,LV,Sun,Sun late,1.95,5.5,3.55,LV +5.5,🚑 QB,50,1.5,,backfill
+Away,Home,Day,Slate,Walters (Home),Market (Home),Edge,Bet,Flags,Injuries,HFA,Saved
+SEA,DEN,Thu,Thu,3.54,2.5,1.04,SEA -2.5,🚑 QB,50,1.5,
+HOU,JAX,Sun,Sun AM,-11.36,-2.5,8.86,JAX -2.5,🌍 INTL,50,1.5,
+CHI,ATL,Sun,Sun early,4.56,1.5,3.06,CHI -1.5,🚑 QB,50,1.5,
+BAL,CLE,Sun,Sun early,5.35,3.0,2.35,BAL -3.0,🚑 QB,50,1.5,
+TEN,IND,Sun,Sun early,-8.47,-6.5,1.97,IND -6.5,🚑 QB,50,1.5,
+NYJ,NE,Sun,Sun early,-7.57,-7.5,0.07,,🚑 QB,50,1.5,
+NO,NYG,Sun,Sun early,-2.11,1.5,3.61,NYG +1.5,🚑 QB,50,1.5,
+CAR,PHI,Sun,Sun early,2.22,3.0,0.78,,🚑 QB,50,1.5,
+PIT,TB,Sun,Sun early,3.01,2.5,0.51,,🚑 QB,50,1.5,
+ARI,LAR,Sun,Sun late,-7.94,-12.5,4.56,ARI +12.5,🚑 QB,50,1.5,
+LAC,KC,Sun,Sun late,-16.07,-7.5,8.57,KC -7.5,🚑 QB,50,1.5,
+BUF,LV,Sun,Sun late,1.95,5.5,3.55,LV +5.5,🚑 QB,50,1.5,
+DAL,GB,Sun,Sun night,-1.55,1.5,3.05,GB +1.5,,50,1.5,
